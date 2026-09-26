@@ -31,8 +31,9 @@
   receives a `BuildSpec` whose every string has passed `Lun.Validate`.
 -/
 import Lean.Data.Json
+import Linen.Data.Json
+import Liaison.Wire
 import Lun.Validate
-import Lun.Liaison.Wire
 
 namespace Lun
 
@@ -41,12 +42,12 @@ open Lean (Json)
 -- ── Types ───────────────────────────────────────────────────────────────────
 
 /-- Credentials for a private repository: a warrant for the connection, and
-    the connection's account. Never persisted and never part of a build's id. -/
+    the connection's account. Never persisted and never part of a build's id.
+    The warrant is decoded with liaison's own wire module (`Liaison.Wire`),
+    so what lun forwards is what liaison parses. -/
 structure Credentials where
-  warrant : Json
+  warrant : Liaison.Warrant
   account : String
-  /-- What the warrant grants, read off its caveats. -/
-  grant : Liaison.Grant
 
 /-- Where the project comes from. -/
 structure Source where
@@ -108,16 +109,19 @@ private def check (ok : Bool) (msg : String) : Except String Unit :=
   if ok then pure () else throw msg
 
 private def parseCredentials (j : Json) (repo : Validate.Repo) : Except String Credentials := do
-  let warrant ← field j "source.credentials" "warrant"
+  let warrantJson ← field j "source.credentials" "warrant"
   let account ← string j "source.credentials" "account"
-  let grant ← Liaison.Grant.ofWarrant warrant |>.mapError ("source.credentials." ++ ·)
+  let warrant ← (Data.Json.Decode.decode warrantJson.compress >>= Liaison.Wire.decodeWarrant)
+    |>.mapError ("source.credentials." ++ ·)
+  -- What the warrant is for; `now` and `cost` are filled in per call.
+  let grant ← Liaison.Wire.Request.ofWarrant warrant 0 0 |>.mapError ("source.credentials." ++ ·)
   let some provider := repo.host.provider?
     | throw "source.credentials: credentials are only usable for github.com and gitlab.com repositories"
-  check (grant.provider == provider)
-    s!"source.credentials: the warrant is for '{grant.provider}', the repository is on {provider}"
-  check (Liaison.validAccount account grant)
+  check (grant.provider.value == provider)
+    s!"source.credentials: the warrant is for '{grant.provider.value}', the repository is on {provider}"
+  check (Liaison.Wire.accountMatchesResource account grant.resource.value)
     "source.credentials.account: must be {user_id}/{connection_id}, the connection being the warrant's resource"
-  return { warrant, account, grant }
+  return { warrant, account }
 
 private def parseSource (j : Json) (allowLocal : Bool) : Except String Source := do
   let url ← string j "source" "url"

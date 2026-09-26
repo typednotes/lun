@@ -55,11 +55,17 @@ def mentions (j : Json) (s : String) : Bool := ((err j).splitOn s).length > 1
 
 -- ── Credentials ─────────────────────────────────────────────────────────────
 
+/-- A warrant as the app mints it (caveats most recent first). -/
 def warrant (provider : String := "github") : Json := Json.mkObj
-  [ ("orgId", "org-1"), ("caveats", Json.arr #[
+  [ ("id", "w-1"), ("orgId", "org-1"), ("tag", "ab01"), ("caveats", Json.arr #[
       Json.mkObj [("kind", "runId"), ("value", "run-1")],
+      Json.mkObj [("kind", "budget"), ("value", "0")],
       Json.mkObj [("kind", "resource"), ("value", "conn-1")],
-      Json.mkObj [("kind", "capability"), ("provider", provider), ("action", "read")]]) ]
+      Json.mkObj [("kind", "capability"), ("provider", provider), ("action", "read")],
+      Json.mkObj [("kind", "expiresAt"), ("value", "1790000000")]]) ]
+
+/-- `warrant` with one field replaced. -/
+def warrantWith (k : String) (v : Json) : Json := (warrant).setObjVal! k v
 
 def creds (w : Json) (account : String := "user-1/conn-1") : Json :=
   Json.mkObj [("warrant", w), ("account", account)]
@@ -69,6 +75,23 @@ def creds (w : Json) (account : String := "user-1/conn-1") : Json :=
 #guard mentions (request (source := [("credentials", creds (warrant) "user-1/other")])) "account"
 #guard mentions (request (source := [("url", "https://example.org/o/r"), ("credentials", creds (warrant))]))
   "only usable for github.com and gitlab.com"
+-- The warrant is decoded as liaison decodes it (`Liaison.Wire`): what liaison
+-- would refuse as malformed is refused here, before any fetch.
+#guard mentions (request (source := [("credentials", creds (warrantWith "tag" "xyz"))]))
+  "source.credentials.warrant.tag"
+#guard mentions (request (source := [("credentials", creds (warrantWith "id" 1))]))
+  "source.credentials.warrant.id"
+#guard mentions (request (source := [("credentials", creds (warrantWith "caveats" (Json.arr #[
+    Json.mkObj [("kind", "sudo"), ("value", "x")]])))])) "unknown caveat kind"
+#guard mentions (request (source := [("credentials", creds (warrantWith "caveats" (Json.arr #[
+    Json.mkObj [("kind", "resource"), ("value", "conn-1")],
+    Json.mkObj [("kind", "runId"), ("value", "run-1")]])))])) "no capability caveat"
+
+-- What lun forwards to liaison is the warrant it was given.
+#guard match BuildSpec.parse (request (source := [("credentials", creds (warrant))])) with
+  | .ok { source := { credentials := some c, .. }, .. } =>
+    (Json.parse (Data.Json.Encode.encode (Liaison.Wire.encodeWarrant c.warrant))).toOption == some (warrant)
+  | _ => false
 
 -- The canonical form never carries credentials, and is what an id is computed from.
 #guard match BuildSpec.parse (request (source := [("credentials", creds (warrant))])) with

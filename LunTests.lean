@@ -1,5 +1,4 @@
 import LunTests.Lun.ValidateTest
-import LunTests.Lun.Liaison.WireTest
 import LunTests.Lun.SpecTest
 import LunTests.Lun.ManifestTest
 import LunTests.Lun.DriverTest

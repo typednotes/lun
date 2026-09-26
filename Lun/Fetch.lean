@@ -66,32 +66,38 @@ def isCodeloadUrl (url : String) : Bool := url.startsWith "https://codeload.gith
 
 -- ── liaison ─────────────────────────────────────────────────────────────────
 
-/-- `GET url` through liaison, with the request's credentials. -/
+/-- `GET url` through liaison, with the request's credentials. The body and
+    the reply are liaison's own wire format (`Liaison.Wire`); `cost` is `0`:
+    fetching a repository spends no credits (the app's warrants carry
+    `budget(0)`). -/
 def viaLiaison (ctx : Context) (cred : Credentials) (url : String)
-    (headers : List (String × String) := []) : IO Liaison.Upstream := do
+    (headers : List (String × String) := []) : IO Liaison.Wire.Response := do
   let some base := ctx.liaisonUrl
     | throw (IO.userError "this repository needs credentials, but LUN_LIAISON_URL is not set")
   -- liaison checks the warrant's expiry against the caller's clock.
   let secs := (← Data.Time.getCurrentTime).nanosSinceEpoch / 1000000000
-  let body := (Liaison.egressBody cred.warrant cred.grant cred.account secs url headers).compress
+  let body ← IO.ofExcept <| (Liaison.Wire.Body.provider cred.warrant secs.toUInt64 0
+    { account := cred.account, method := "GET", url, headers }).mapError IO.userError
   let target := (if base.endsWith "/" then (base.dropEnd 1).toString else base) ++ "/v0/egress"
   let req ← Network.HTTP.Simple.parseUrl! target
   let req : Request := { req with
     method := Method.standard .POST
     headers := [(Data.CI.mk' "Content-Type", "application/json")]
-    body := some body.toUTF8
+    body := some body.encode.toUTF8
     timeoutMillis := ctx.timeoutMs }
   let resp ← Network.HTTP.Simple.httpBS req
   let text := String.fromUTF8? resp.body |>.getD ""
-  IO.ofExcept (Liaison.parseResponse resp.statusCode.statusCode text |>.mapError IO.userError)
+  match ← IO.ofExcept (Liaison.Wire.decodeReply resp.statusCode.statusCode text |>.mapError IO.userError) with
+  | .relayed r => pure r
+  | .refused status code => throw (IO.userError s!"liaison refused the call ({status} {code})")
 
 /-- A liaison-relayed answer's body as JSON. -/
-private def jsonBody (u : Liaison.Upstream) (what : String) : IO Json :=
+private def jsonBody (u : Liaison.Wire.Response) (what : String) : IO Json :=
   match String.fromUTF8? u.body >>= fun t => (Json.parse t).toOption with
   | some j => pure j
   | none => throw (IO.userError s!"{what}: the answer is not JSON")
 
-private def expectOk (u : Liaison.Upstream) (what : String) : IO Unit :=
+private def expectOk (u : Liaison.Wire.Response) (what : String) : IO Unit :=
   unless u.status == 200 do
     let snippet := ((String.fromUTF8? u.body).getD "").take 200
     throw (IO.userError s!"{what}: the host answered {u.status} {snippet}")

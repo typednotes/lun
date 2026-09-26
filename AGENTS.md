@@ -6,19 +6,18 @@ of cells (a program in linen's `Reactive` monad). See `README.md` for the API.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
 Built on `linen` (pinned `v1.2.0` for lun itself; user projects need
-linen ≥ `1.3.0`, see below).
+linen ≥ `1.3.0`, see below). Speaks to `liaison` with liaison's own wire
+module, `Liaison.Wire` (pinned `v0.5.0`).
 
 ## Layout
 
 - `Lun/Validate.lean` — the grammar of every string a request carries
   (names, branch, commit, project path, repository URL, embedded Lean text).
   Pure.
-- `Lun/Liaison/Wire.lean` — liaison's `POST /v0/egress` as lun speaks it:
-  `Grant.ofWarrant` (provider/action/resource/run/org read off the warrant's
-  caveats), `egressBody`, `parseResponse`. Pure.
 - `Lun/Spec.lean` — the build request: `BuildSpec.parse` (the only place a
   request is interpreted) and `BuildSpec.canonical` (no credentials; what ids
-  are computed from and what is persisted).
+  are computed from and what is persisted). A warrant is decoded with
+  `Liaison.Wire.decodeWarrant`, exactly as liaison decodes it.
 - `Lun/Manifest.lean` — the project may depend on linen only (read from its
   committed `lake-manifest.json`).
 - `Lun/Driver.lean` — the generated driver package (`files`): one module per
@@ -63,7 +62,14 @@ takes a couple of minutes (it builds the fixture's driver ten times).
   `repeat` loops are used for polling (processes, request bodies); no
   `partial def`.
 - Everything that interprets untrusted input is pure and unit-tested
-  (`Validate`, `Wire`, `Spec`, `Manifest`, `Driver`, `Diagnostics`).
+  (`Validate`, `Spec`, `Manifest`, `Driver`, `Diagnostics`).
+- liaison's wire format is liaison's: lun imports `Liaison.Wire` (the module
+  liaison's server parses with, tested there) and never writes or reads
+  `POST /v0/egress` JSON itself. Import nothing else from liaison: `lun`
+  builds only `Liaison.Wire` and the warrant types. (`LunTests`, being
+  `precompileModules`, builds liaison's whole library as a shared object;
+  that is harmless — a library link — but it is why it builds liaison's
+  Postgres modules.)
 - Request text is never spliced into generated code: names are validated and
   `«quoted»`, signatures and programs are raw string literals parsed as one term
   by the runtime. Keep it that way.
@@ -75,6 +81,9 @@ is always left to the user.
 
 ## Known gaps (named, not silent)
 
+- **liaison v0.5.0 is tagged locally, not pushed yet.** Until it is on
+  GitHub, a fresh `lake build` (CI, the image) cannot fetch it; a checkout
+  with `.lake/packages/liaison` at that tag builds.
 - **linen 1.3.0 is not released yet.** lun's runtime needs
   `Control.Reactive` and `Control.Monad.Effect.Handler`, added to linen in its
   working tree as 1.3.0 but not tagged. Until it is: the `Dockerfile`'s

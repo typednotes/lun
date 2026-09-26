@@ -133,7 +133,7 @@ def validId (id : String) : Bool := id.length == 64 && id.all fun c => c.isDigit
 
 /-- The id of a request (see the module documentation). -/
 def buildId (cfg : Config) (spec : BuildSpec) : IO String := do
-  let scope := (spec.source.credentials.map (·.grant.orgId)).getD "public"
+  let scope := (spec.source.credentials.map (·.warrant.orgId.value)).getD "public"
   let input := s!"{cfg.salt}\n{scope}\n{spec.canonical.compress}"
   return Data.Hex.encode (← Crypto.SHA256.digest input.toUTF8)
 

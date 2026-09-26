@@ -131,7 +131,9 @@ lun never sees a credential. For a private repository it sends each host API
 call to liaison (`POST /v0/egress`) with the request's warrant, exactly as the
 typednotes app does; liaison checks the warrant, attaches the credential, and
 relays the answer. The warrant's caveats decide the provider, resource, run
-and org of the call. lun checks the branch with the host's compare /
+and org of the call. lun speaks liaison's wire format with liaison's own
+module (`Liaison.Wire`), so a warrant liaison would refuse as malformed is
+refused when the build is requested. lun checks the branch with the host's compare /
 merge-base API and downloads the commit's archive (GitHub answers with a
 short-lived signed `codeload.github.com` URL, which lun fetches directly).
 Public repositories are cloned with `git`.

@@ -1,5 +1,4 @@
 import Lun.Validate
-import Lun.Liaison.Wire
 import Lun.Spec
 import Lun.Driver
 import Lun.Manifest
