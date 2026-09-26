@@ -1,0 +1,84 @@
+/-
+  Tests for `Lun.Spec`: a well-formed request parses; each malformed field is
+  refused with a message naming it; credentials must match the host; the
+  canonical form omits credentials.
+-/
+import Lun.Spec
+
+open Lean (Json)
+open Lun
+
+namespace LunTests.Spec
+
+def commit := "dc19b371d09f409810678d8b35dbb381afecf272"
+
+def cell (name : String := "math.double") (fn : String := "P.double") : Json := Json.mkObj
+  [("name", name), ("module", "P.Math"), ("function", fn), ("signature", "Nat → Eff [] Nat")]
+
+def request (source : List (String × Json) := []) (cells : List Json := [cell])
+    (dags : List Json := []) (extra : List (String × Json) := []) : Json :=
+  Json.mkObj <|
+    [ ("source", Json.mkObj (([("url", "https://github.com/o/r"), ("branch", "main"),
+        ("commit", commit)] : List (String × Json)) ++ source))
+    , ("cells", Json.arr cells.toArray), ("dags", Json.arr dags.toArray) ] ++ extra
+
+def err (j : Json) (allowLocal := false) : String :=
+  match BuildSpec.parse j allowLocal with
+  | .ok _ => "ok"
+  | .error e => e
+
+/-- The error mentions `s`. -/
+def mentions (j : Json) (s : String) : Bool := ((err j).splitOn s).length > 1
+
+#guard err (request) == "ok"
+#guard ((BuildSpec.parse (request (dags := [Json.mkObj [("name", "main"), ("program", "do\n  pure ()")]]))).toOption.map
+  (·.dags.length)) == some 1
+#guard (BuildSpec.parse (request (extra := [("open", Json.arr #["P"])]))).toOption.map (·.opens) == some ["P"]
+#guard (BuildSpec.parse (request (source := [("path", "lean")]))).toOption.map (·.source.path) == some "lean"
+
+-- Each field is validated, and the message says which.
+#guard mentions (Json.mkObj []) "source"
+#guard mentions (request (source := [("commit", "abc")])) "source.commit"
+#guard mentions (request (source := [("branch", "-x")])) "source.branch"
+#guard mentions (request (source := [("path", "../x")])) "source.path"
+#guard mentions (request (source := [("url", "ssh://github.com/o/r")])) "source.url"
+#guard mentions (request (cells := [])) "at least one cell"
+#guard mentions (request (cells := [cell "bad name"])) "cells[0].name"
+#guard mentions (request (cells := [cell (fn := "a b")])) "cells[0].function"
+#guard mentions (request (cells := [cell, cell])) "declared twice"
+#guard mentions (request (cells := [Json.mkObj [("name", "x"), ("module", "M"), ("function", "f"),
+  ("signature", "Nat\n→ Nat")]])) "signature"
+#guard mentions (request (dags := [Json.mkObj [("name", "d"), ("program", 3)]])) "dags[0].program"
+#guard mentions (request (extra := [("open", Json.arr #["a b"])])) "open"
+#guard mentions (request (source := [("url", "file:///tmp/r")])) "local mode"
+#guard err (request (source := [("url", "file:///tmp/r")])) (allowLocal := true) == "ok"
+
+-- ── Credentials ─────────────────────────────────────────────────────────────
+
+def warrant (provider : String := "github") : Json := Json.mkObj
+  [ ("orgId", "org-1"), ("caveats", Json.arr #[
+      Json.mkObj [("kind", "runId"), ("value", "run-1")],
+      Json.mkObj [("kind", "resource"), ("value", "conn-1")],
+      Json.mkObj [("kind", "capability"), ("provider", provider), ("action", "read")]]) ]
+
+def creds (w : Json) (account : String := "user-1/conn-1") : Json :=
+  Json.mkObj [("warrant", w), ("account", account)]
+
+#guard err (request (source := [("credentials", creds (warrant))])) == "ok"
+#guard mentions (request (source := [("credentials", creds (warrant "gitlab"))])) "the warrant is for 'gitlab'"
+#guard mentions (request (source := [("credentials", creds (warrant) "user-1/other")])) "account"
+#guard mentions (request (source := [("url", "https://example.org/o/r"), ("credentials", creds (warrant))]))
+  "only usable for github.com and gitlab.com"
+
+-- The canonical form never carries credentials, and is what an id is computed from.
+#guard match BuildSpec.parse (request (source := [("credentials", creds (warrant))])) with
+  | .ok s => ((s.canonical.getObjVal? "source").toOption.bind (·.getObjVal? "credentials" |>.toOption)).isNone
+  | .error _ => false
+#guard match BuildSpec.parse (request (source := [("credentials", creds (warrant))])), BuildSpec.parse (request) with
+  | .ok a, .ok b => a.canonical.compress == b.canonical.compress
+  | _, _ => false
+
+#guard firstDuplicate ["a", "b", "a"] == some "a"
+#guard firstDuplicate ["a", "b"] == none
+
+end LunTests.Spec

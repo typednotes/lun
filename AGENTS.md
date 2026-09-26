@@ -1,0 +1,120 @@
+# lun — agent notes
+
+`lun` compiles a Lean project (a git repository at a commit) into typed
+services: one per cell (a function under a declared signature) and one per DAG
+of cells (a program in linen's `Reactive` monad). See `README.md` for the API.
+It is the runner; `lode` is the agent that writes the projects it runs —
+do not confuse the two.
+Built on `linen` (pinned `v1.2.0` for lun itself; user projects need
+linen ≥ `1.3.0`, see below).
+
+## Layout
+
+- `Lun/Validate.lean` — the grammar of every string a request carries
+  (names, branch, commit, project path, repository URL, embedded Lean text).
+  Pure.
+- `Lun/Liaison/Wire.lean` — liaison's `POST /v0/egress` as lun speaks it:
+  `Grant.ofWarrant` (provider/action/resource/run/org read off the warrant's
+  caveats), `egressBody`, `parseResponse`. Pure.
+- `Lun/Spec.lean` — the build request: `BuildSpec.parse` (the only place a
+  request is interpreted) and `BuildSpec.canonical` (no credentials; what ids
+  are computed from and what is persisted).
+- `Lun/Manifest.lean` — the project may depend on linen only (read from its
+  committed `lake-manifest.json`).
+- `Lun/Driver.lean` — the generated driver package (`files`): one module per
+  cell and per DAG. Embeds `template/LunDriver/Runtime.lean` with
+  `include_str`. Pure.
+- `template/LunDriver/Runtime.lean` — **the driver runtime**, copied into
+  every driver. `CellFn` (which function types are cells and how to call them
+  on JSON), the `lun_cell` and `lun_dag` commands (the signature and DAG
+  checks, as elaborators), and `driverMain` (the executable's stdin/stdout
+  protocol). It imports linen ≥ 1.3.0 modules, so it is **not** part of lun's
+  own build: it is compiled only inside a driver. `test/e2e.sh` is what
+  exercises it; `LunTests/Lun/DriverTest.lean` only checks it is embedded.
+- `Lun/Diagnostics.lean` — `lake build` output → diagnostics attributed to a
+  cell, DAG (with the line in the program), the project, the driver, or the
+  build. Pure.
+- `Lun/Process.lean` — run a command with a deadline (process group killed),
+  `hermeticGit` (host git config ignored).
+- `Lun/Fetch.lean` — `git` for public repositories; GitHub/GitLab REST
+  through liaison for private ones.
+- `Lun/Build.lean` — ids, statuses (`status.json`, atomic writes), the build
+  pipeline (fetch → check, then under a lock generate → `lake build` →
+  describe), the package-cache seeding, and `Builder.call` (running a ready
+  driver).
+- `Lun/Server.lean` — the HTTP routes. `Main.lean` — environment.
+- `test/fixture/` — a user project for the end-to-end test (cells that pass,
+  `Fixture/Rejected.lean` for ones that must not). `test/e2e.sh` — the
+  end-to-end test.
+
+## Running tests
+
+```
+lake build LunTests
+test/e2e.sh ../linen      # needs jq, git, and a linen checkout >= 1.3.0
+```
+
+`test/e2e.sh` picks a free port, runs lun with `LUN_ALLOW_LOCAL=1`, and
+takes a couple of minutes (it builds the fixture's driver ten times).
+
+## Conventions
+
+- As in linen: no `sorry`; document definitions; `── … ──` section banners.
+  `repeat` loops are used for polling (processes, request bodies); no
+  `partial def`.
+- Everything that interprets untrusted input is pure and unit-tested
+  (`Validate`, `Wire`, `Spec`, `Manifest`, `Driver`, `Diagnostics`).
+- Request text is never spliced into generated code: names are validated and
+  `«quoted»`, signatures and programs are raw string literals parsed as one term
+  by the runtime. Keep it that way.
+
+## Git
+
+**Never run `git push` in this repo.** Commits are fine when asked for; pushing
+is always left to the user.
+
+## Known gaps (named, not silent)
+
+- **linen 1.3.0 is not released yet.** lun's runtime needs
+  `Control.Reactive` and `Control.Monad.Effect.Handler`, added to linen in its
+  working tree as 1.3.0 but not tagged. Until it is: the `Dockerfile`'s
+  default `LINEN_REF=v1.3.0` does not exist (the image build fails at the
+  cache stage), and the CI `e2e` job needs linen's `main` to contain it. The
+  end-to-end test passes locally against the linen working tree.
+- **The container image has not been built here** (the local podman needed an
+  interactive registry login). The Linux link of `lun` and of drivers is
+  unverified; lun's own link and the drivers' were verified on macOS.
+- **Types are not a sandbox.** The checks bind the *declared* authority of a
+  cell (its effect row, handled by linen's handlers), but a project's code can
+  still reach arbitrary `IO` through `unsafe` definitions, `@[implemented_by]`
+  or `@[extern]` deeper inside a function (only the cell function itself is
+  checked for `unsafe`), and its `lakefile.lean` runs arbitrary code at build
+  time. The container is the isolation boundary; run lun with no credentials
+  of its own and no network access beyond what builds need.
+- **The DAG check is a walk plus a denylist, not a proof.** It refuses
+  `Cell.mk`, `Signal.mk`, `Graph.mk`, `Node.*` and `Reactive`'s internals
+  anywhere in the DAG's non-library code (tested: structure instances, `with`
+  updates, anonymous constructors, a raw `StateM Graph`), but library
+  functions are trusted, not walked. Known consequence: a `Signal` taken out of
+  a *separate* `Reactive.build` (`(input "y" Nat).build.1`) is accepted, naming
+  a node index of another graph. It cannot break typing or safety — every
+  applied cell is a declared, checked one, the graph is re-validated (well
+  formed, declared cells, arities, distinct inputs) and every value is decoded
+  by the cell it reaches — but the edge may point at an unintended node.
+- **`HTTP` and `FileSystem` cells act from lun's container directly**, not
+  through liaison: no credentials, no metering, no audit row. Their capability
+  (in the signature) bounds what they may reach.
+- **Cells run in-process per call**: each call spawns the driver (no
+  long-running per-cell service, no pooling). DAGs evaluate sequentially.
+- **One compilation at a time** (fetches run concurrently). A queued build's
+  warrant is used as soon as the build starts fetching, not after the queue.
+- **Private repositories**: github.com and gitlab.com only (the connections'
+  `base_url`s); archives are held in memory; submodules are not fetched on
+  either path. GitLab's archive, GitHub's compare and GitLab's merge-base go
+  through liaison; GitHub's signed tarball URL is fetched directly.
+- **Only `Trace`, `Error`, `HTTP`, `FileSystem`** effects are allowed in a cell
+  (those with a configuration-free `Handler _ IO` in linen). `Reader`, `State`,
+  `PostgreSQL`, … would need configuration lun does not have.
+- **A project linked to a linen revision the package cache lacks** builds its
+  linen from scratch (correct but slow). The cache holds one revision.
+- **Build ids change across restarts unless `LUN_ID_SALT` is set.**

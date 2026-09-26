@@ -1,0 +1,12 @@
+name = "fixture"
+defaultTargets = ["Fixture"]
+
+# A local path so the end-to-end test builds against the working tree of
+# linen (which carries `Control.Reactive` / `Control.Monad.Effect.Handler`
+# before they are tagged). A real user project pins linen by git tag.
+[[require]]
+name = "linen"
+path = "../../../linen"
+
+[[lean_lib]]
+name = "Fixture"

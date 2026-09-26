@@ -1,0 +1,10 @@
+import LunTests.Lun.ValidateTest
+import LunTests.Lun.Liaison.WireTest
+import LunTests.Lun.SpecTest
+import LunTests.Lun.ManifestTest
+import LunTests.Lun.DriverTest
+import LunTests.Lun.DiagnosticsTest
+import LunTests.Lun.FetchTest
+import LunTests.Lun.ProcessTest
+import LunTests.Lun.BuildTest
+import LunTests.Lun.ServerTest

@@ -1,0 +1,35 @@
+name: Lean Action CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # linen's native build dependencies (it builds its FFI as a dependency).
+      - run: sudo apt-get update && sudo apt-get install -y libpq-dev libssl-dev pkg-config unzip zlib1g-dev libsecret-1-dev
+      - uses: leanprover/lean-action@v1
+      - run: lake build LunTests
+
+  # The end-to-end test builds a real project against a linen carrying
+  # `Control.Reactive` and `Control.Monad.Effect.Handler` (linen >= 1.3.0),
+  # checked out next to lun, as `test/e2e.sh` expects.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: lun
+      - uses: actions/checkout@v5
+        with:
+          repository: typednotes/linen
+          ref: ${{ vars.LINEN_E2E_REF || 'main' }}
+          path: linen
+      - run: sudo apt-get update && sudo apt-get install -y libpq-dev libssl-dev pkg-config unzip zlib1g-dev libsecret-1-dev jq
+      - run: curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+      - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: lun/test/e2e.sh linen
