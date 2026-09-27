@@ -13,14 +13,14 @@
         "account": "{user_id}/{connection_id}"
       }
     },
-    "open": ["MyProject"],                       // optional: namespaces opened for signatures/DAGs
-    "cells": [
-      { "name": "math.double",                   // dotted; what DAGs call it by
+    "open": ["MyProject"],                       // optional: namespaces opened for signatures/graphs
+    "functions": [
+      { "name": "math.double",                   // dotted; what graphs call it by
         "module": "MyProject.Math",              // the module to import
         "function": "MyProject.Math.double",     // the function
         "signature": "Nat → Eff [] Nat" }        // its declared type
     ],
-    "dags": [
+    "graphs": [
       { "name": "main",
         "program": "do\n  let x ← input \"x\" Nat\n  math.double x" }
     ]
@@ -58,16 +58,16 @@ structure Source where
   path : String
   credentials : Option Credentials
 
-/-- A cell: a function of the project, under a name and a declared signature. -/
-structure CellSpec where
+/-- A function of the project, under a name and a declared signature. -/
+structure FunctionSpec where
   name : String
   module : String
   function : String
   signature : String
   deriving DecidableEq, Repr, Inhabited
 
-/-- A DAG: a `Reactive` program over the cells. -/
-structure DagSpec where
+/-- A graph: a `Reactive` program over the functions. -/
+structure GraphSpec where
   name : String
   program : String
   deriving DecidableEq, Repr, Inhabited
@@ -76,12 +76,12 @@ structure DagSpec where
 structure BuildSpec where
   source : Source
   opens : List String
-  cells : List CellSpec
-  dags : List DagSpec
+  functions : List FunctionSpec
+  graphs : List GraphSpec
 
-/-- At most this many cells, and this many DAGs, per build. -/
-def maxCells : Nat := 256
-def maxDags : Nat := 64
+/-- At most this many functions, and this many graphs, per build. -/
+def maxFunctions : Nat := 256
+def maxGraphs : Nat := 64
 
 -- ── Parsing ─────────────────────────────────────────────────────────────────
 
@@ -138,10 +138,10 @@ private def parseSource (j : Json) (allowLocal : Bool) : Except String Source :=
   let credentials ← (optional j "credentials").mapM (parseCredentials · repo)
   return { repo, branch, commit, path, credentials }
 
-private def parseCell (j : Json) (i : Nat) : Except String CellSpec := do
-  let ctx := s!"cells[{i}]"
+private def parseFunction (j : Json) (i : Nat) : Except String FunctionSpec := do
+  let ctx := s!"functions[{i}]"
   let name ← string j ctx "name"
-  check (Validate.cellName name) s!"{ctx}.name: must be dotted identifiers, e.g. math.double"
+  check (Validate.functionName name) s!"{ctx}.name: must be dotted identifiers, e.g. math.double"
   let module ← string j ctx "module"
   check (Validate.moduleName module) s!"{ctx}.module: not a Lean module name"
   let function ← string j ctx "function"
@@ -151,10 +151,10 @@ private def parseCell (j : Json) (i : Nat) : Except String CellSpec := do
     s!"{ctx}.signature: must be one line of Lean"
   return { name, module, function, signature }
 
-private def parseDag (j : Json) (i : Nat) : Except String DagSpec := do
-  let ctx := s!"dags[{i}]"
+private def parseGraph (j : Json) (i : Nat) : Except String GraphSpec := do
+  let ctx := s!"graphs[{i}]"
   let name ← string j ctx "name"
-  check (Validate.cellName name) s!"{ctx}.name: must be dotted identifiers"
+  check (Validate.functionName name) s!"{ctx}.name: must be dotted identifiers"
   let program ← string j ctx "program"
   check (Validate.leanText program (multiline := true)) s!"{ctx}.program: must be Lean text"
   return { name, program }
@@ -171,16 +171,16 @@ def BuildSpec.parse (j : Json) (allowLocal : Bool := false) : Except String Buil
   let opens ← (← array j "request" "open").mapM fun
     | .str s => if Validate.declName s then pure s else throw s!"open: '{s}' is not a namespace"
     | _ => throw "open: must be strings"
-  let cellJs ← array j "request" "cells"
-  let dagJs ← array j "request" "dags"
-  check (!cellJs.isEmpty) "cells: a build declares at least one cell"
-  check (cellJs.length ≤ maxCells) s!"cells: at most {maxCells}"
-  check (dagJs.length ≤ maxDags) s!"dags: at most {maxDags}"
-  let cells ← cellJs.zipIdx.mapM fun (c, i) => parseCell c i
-  let dags ← dagJs.zipIdx.mapM fun (d, i) => parseDag d i
-  if let some n := firstDuplicate (cells.map (·.name)) then throw s!"cells: '{n}' is declared twice"
-  if let some n := firstDuplicate (dags.map (·.name)) then throw s!"dags: '{n}' is declared twice"
-  return { source, opens, cells, dags }
+  let functionJs ← array j "request" "functions"
+  let graphJs ← array j "request" "graphs"
+  check (!functionJs.isEmpty) "functions: a build declares at least one function"
+  check (functionJs.length ≤ maxFunctions) s!"functions: at most {maxFunctions}"
+  check (graphJs.length ≤ maxGraphs) s!"graphs: at most {maxGraphs}"
+  let functions ← functionJs.zipIdx.mapM fun (c, i) => parseFunction c i
+  let graphs ← graphJs.zipIdx.mapM fun (d, i) => parseGraph d i
+  if let some n := firstDuplicate (functions.map (·.name)) then throw s!"functions: '{n}' is declared twice"
+  if let some n := firstDuplicate (graphs.map (·.name)) then throw s!"graphs: '{n}' is declared twice"
+  return { source, opens, functions, graphs }
 
 -- ── Canonical form ──────────────────────────────────────────────────────────
 
@@ -193,10 +193,10 @@ def BuildSpec.canonical (s : BuildSpec) : Json :=
         [ ("url", s.source.repo.cloneUrl), ("branch", s.source.branch)
         , ("commit", s.source.commit), ("path", s.source.path) ])
     , ("open", Json.arr (s.opens.map Json.str).toArray)
-    , ("cells", Json.arr (s.cells.map fun c => Json.mkObj
+    , ("functions", Json.arr (s.functions.map fun c => Json.mkObj
         [ ("name", c.name), ("module", c.module), ("function", c.function)
         , ("signature", c.signature) ]).toArray)
-    , ("dags", Json.arr (s.dags.map fun d => Json.mkObj
+    , ("graphs", Json.arr (s.graphs.map fun d => Json.mkObj
         [("name", d.name), ("program", d.program)]).toArray) ]
 
 end Lun

@@ -1,5 +1,5 @@
 /-
-  Functions lun must refuse as cells.
+  Functions lun must refuse as functions.
 -/
 import Linen.Control.Monad.Effect
 import Linen.Control.Monad.Effect.Handler

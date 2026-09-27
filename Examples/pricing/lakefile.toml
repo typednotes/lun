@@ -1,0 +1,12 @@
+name = "pricing"
+defaultTargets = ["Pricing"]
+
+# A real project pins linen by tag. (`Examples/run.sh LINEN_DIR` swaps this
+# for a local checkout, to reuse its build.)
+[[require]]
+name = "linen"
+git = "https://github.com/typednotes/linen"
+rev = "v1.5.0"
+
+[[lean_lib]]
+name = "Pricing"

@@ -5,29 +5,33 @@
   |---|---|
   | `GET /_health` | `200 ok` (liveness) |
   | `POST /v0/builds` | submit a build request (`Lun.Spec`); `202` with its status while it runs, `200` if that build is already ready |
-  | `GET /v0/builds/{id}` | the build's status: state, diagnostics, and once ready its cells and DAGs |
+  | `GET /v0/builds/{id}` | the build's status: state, diagnostics, and once ready its functions and graphs |
   | `GET /v0/builds/{id}/log` | the build's log (`text/plain`) |
-  | `POST /v0/builds/{id}/cells/{name}` | the cell's service: `{"input": x}` → `{"output": y}`, `{"inputs": [x, …]}` → `{"outputs": [...]}` |
-  | `POST /v0/builds/{id}/dags/{name}` | the DAG's service: `{"inputs": {"name": x, …}}` → `{"nodes": [...]}`, every node's value |
+  | `POST /v0/builds/{id}/functions/{name}` | the function's service: `{"input": x}` → `{"output": y}`, `{"inputs": [x, …]}` → `{"outputs": [...]}` |
+  | `POST /v0/builds/{id}/graphs/{name}` | the graph's service: `{"inputs": {"name": x, …}}` → `{"nodes": [...]}`, every node's value |
+  | `POST /v0/builds/{id}/graphs/{name}/sessions` | start a session of the graph (`Lun.Session`): `201` `{"session", "nodes"}` |
+  | `GET /v0/sessions/{session}` | the session's nodes |
+  | `POST /v0/sessions/{session}` | update some inputs: `{"inputs": {…}}` → `{"changed": [...], "nodes": [...]}` |
+  | `DELETE /v0/sessions/{session}` | end the session |
 
   Errors are `{"error": message}`. When `LUN_TOKEN` is set every route but
   `/_health` requires `Authorization: Bearer {token}`.
 -/
 import Lean.Data.Json
 import Linen.Network.WebApp
-import Lun.Build
+import Lun.Session
 
 namespace Lun
 
 open Lean (Json toJson)
 open Network.HTTP.Types
 
-/-- The largest request body accepted: build requests and cell calls alike. -/
+/-- The largest request body accepted: build requests and function calls alike. -/
 def maxBodyBytes : Nat := 16 * 1024 * 1024
 
 /-- The statuses lun answers with. -/
 def statusOf : Nat → Network.HTTP.Types.Status
-  | 200 => status200 | 202 => status202 | 400 => status400 | 401 => status401
+  | 200 => status200 | 201 => status201 | 202 => status202 | 400 => status400 | 401 => status401
   | 404 => status404 | 409 => status409 | 502 => status502 | 504 => status504
   | _ => status500
 
@@ -75,6 +79,13 @@ private def submit (b : Builder) (req : Network.WebApp.Request) : IO Network.Web
     let s ← b.submit spec
     return json (if s.state == .ready then 200 else 202) (toJson s)
 
+/-- Answer with what an operation answered, reading the body first. -/
+private def withBody (req : Network.WebApp.Request) (op : String → IO Answer) :
+    IO Network.WebApp.Response := do
+  let some text ← readBody req | return error 400 "the request body is too large or not UTF-8"
+  let a ← op text
+  return json a.status a.body
+
 private def call (b : Builder) (id kind name : String) (req : Network.WebApp.Request) :
     IO Network.WebApp.Response := do
   let some text ← readBody req | return error 400 "the request body is too large or not UTF-8"
@@ -82,10 +93,12 @@ private def call (b : Builder) (id kind name : String) (req : Network.WebApp.Req
   return json a.status a.body
 
 /-- Route one request. -/
-def route (b : Builder) (req : Network.WebApp.Request) : IO Network.WebApp.Response := do
+def route (b : Builder) (ss : Sessions) (req : Network.WebApp.Request) :
+    IO Network.WebApp.Response := do
   let m := req.requestMethod
   let get := m == .standard .GET
   let post := m == .standard .POST
+  let delete := m == .standard .DELETE
   match req.pathInfo with
   | ["_health"] =>
     if get then return Network.WebApp.responseLBS status200 [(hContentType, "text/plain")] "ok"
@@ -106,20 +119,33 @@ def route (b : Builder) (req : Network.WebApp.Request) : IO Network.WebApp.Respo
       unless ← file.pathExists do return error 404 "no log for this build"
       return Network.WebApp.responseLBS status200 [(hContentType, "text/plain; charset=utf-8")]
         (← IO.FS.readFile file)
-    | ["v0", "builds", id, "cells", name] =>
-      unless post && validId id && Validate.cellName name do return error 404 "not found"
-      call b id "cell" name req
-    | ["v0", "builds", id, "dags", name] =>
-      unless post && validId id && Validate.cellName name do return error 404 "not found"
-      call b id "dag" name req
+    | ["v0", "builds", id, "functions", name] =>
+      unless post && validId id && Validate.functionName name do return error 404 "not found"
+      call b id "function" name req
+    | ["v0", "builds", id, "graphs", name] =>
+      unless post && validId id && Validate.functionName name do return error 404 "not found"
+      call b id "graph" name req
+    | ["v0", "builds", id, "graphs", name, "sessions"] =>
+      unless post && validId id && Validate.functionName name do return error 404 "not found"
+      withBody req (b.startSession id name)
+    | ["v0", "sessions", session] =>
+      unless validSessionId session do return error 404 "not found"
+      if get then
+        let a ← b.readSession session
+        return json a.status a.body
+      else if post then withBody req (b.updateSession ss session)
+      else if delete then
+        let a ← b.endSession ss session
+        return json a.status a.body
+      else return error 404 "not found"
     | _ => return error 404 "not found"
 
 /-- lun's `Application`. An unexpected exception is a `500`, never a dropped
     connection. -/
-def application (b : Builder) : Network.WebApp.Application :=
+def application (b : Builder) (ss : Sessions) : Network.WebApp.Application :=
   fun req respond =>
     Network.WebApp.AppM.respondIO respond do
-      try route b req
+      try route b ss req
       catch e => pure (error 500 (toString e))
 
 end Lun

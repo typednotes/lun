@@ -9,11 +9,11 @@
      (`Lun.Manifest`);
   3. **generate** the driver around it (`Lun.Driver`), seeding linen's
      build from the package cache when the locked revision is there;
-  4. **build** it with `lake build`: this type-checks every cell against its
-     declared signature, every DAG against the cells, and compiles the
-     `lun-driver` executable; every message is attributed to the cell, DAG
+  4. **build** it with `lake build`: this type-checks every function against its
+     declared signature, every graph against the functions, and compiles the
+     `lun-driver` executable; every message is attributed to the function, graph
      or project it concerns (`Lun.Diagnostics`);
-  5. **describe** it (`lun-driver describe`): the cells and each DAG's
+  5. **describe** it (`lun-driver describe`): the functions and each graph's
      structure, recorded in the status.
 
   Everything about a build lives under `{workdir}/builds/{id}/`: `status.json`
@@ -93,7 +93,7 @@ structure Status where
   source : Json
   error : Option String := none
   diagnostics : Array Json := #[]
-  /-- `lun-driver describe`'s answer, once ready: `{"cells": …, "dags": …}`. -/
+  /-- `lun-driver describe`'s answer, once ready: `{"functions": …, "graphs": …}`. -/
   description : Option Json := none
 
 instance : ToJson Status where
@@ -102,8 +102,8 @@ instance : ToJson Status where
     , ("diagnostics", Json.arr s.diagnostics) ] ++
     (s.error.map fun e => [("error", toJson e)]).getD [] ++
     (match s.description with
-     | some d => [("cells", (d.getObjVal? "cells").toOption.getD (Json.arr #[])),
-                  ("dags", (d.getObjVal? "dags").toOption.getD (Json.arr #[]))]
+     | some d => [("functions", (d.getObjVal? "functions").toOption.getD (Json.arr #[])),
+                  ("graphs", (d.getObjVal? "graphs").toOption.getD (Json.arr #[]))]
      | none => [])
 
 /-- Read a status back from its JSON. -/
@@ -113,8 +113,8 @@ def Status.ofJson (j : Json) : Except String Status := do
   let source ← j.getObjVal? "source"
   let error := (j.getObjValAs? String "error").toOption
   let diagnostics := (j.getObjValAs? (Array Json) "diagnostics").toOption.getD #[]
-  let description := match j.getObjVal? "cells", j.getObjVal? "dags" with
-    | .ok c, .ok d => some (Json.mkObj [("cells", c), ("dags", d)])
+  let description := match j.getObjVal? "functions", j.getObjVal? "graphs" with
+    | .ok c, .ok d => some (Json.mkObj [("functions", c), ("graphs", d)])
     | _, _ => none
   return { id, state, source, error, diagnostics, description }
 
@@ -162,10 +162,10 @@ private def appendLog (cfg : Config) (id : String) (text : String) : IO Unit := 
 /-- A diagnostic as a status reports it, with what it is about. -/
 def diagnosticJson (spec : BuildSpec) (d : Diagnostics.Diagnostic) : Json :=
   let (scope, name, d) : String × Option String × Diagnostics.Diagnostic := match d.scope with
-    | .cell i => ("cell", (spec.cells[i]?.map (·.name)), d)
-    | .dag j => ("dag", (spec.dags[j]?.map (·.name)),
-        match spec.dags[j]? with
-        | some dg => d.inProgram (Driver.dagProgramStart spec.opens dg)
+    | .function i => ("function", (spec.functions[i]?.map (·.name)), d)
+    | .graph j => ("graph", (spec.graphs[j]?.map (·.name)),
+        match spec.graphs[j]? with
+        | some dg => d.inProgram (Driver.graphProgramStart spec.opens dg)
         | none => d)
     | .project => ("project", none, d)
     | .driver => ("driver", none, d)
@@ -176,11 +176,11 @@ def diagnosticJson (spec : BuildSpec) (d : Diagnostics.Diagnostic) : Json :=
   Json.mkObj <| [("scope", toJson scope)] ++ (name.map fun n => [("name", toJson n)]).getD [] ++
     base ++ ((Diagnostics.linenTooOldHint d).map fun h => [("hint", toJson h)]).getD []
 
-/-- The diagnostics worth reporting: every error, and warnings about cells
-    and DAGs (not the project's or linen's own warnings). -/
+/-- The diagnostics worth reporting: every error, and warnings about functions
+    and graphs (not the project's or linen's own warnings). -/
 def reportable (d : Diagnostics.Diagnostic) : Bool :=
   d.severity == "error" || match d.scope with
-    | .cell _ | .dag _ => true
+    | .function _ | .graph _ => true
     | _ => false
 
 -- ── The builder ─────────────────────────────────────────────────────────────
@@ -333,16 +333,19 @@ structure Answer where
 private def errorAnswer (status : Nat) (msg : String) : Answer :=
   { status, body := Json.mkObj [("error", toJson msg)] }
 
-/-- Call a cell (`kind = "cell"`) or DAG (`kind = "dag"`) of a ready build
-    with a JSON request body. The driver's traces (stderr) come back as `log`. -/
+/-- Call a function (`kind = "function"`), a graph (`kind = "graph"`) or a session of a
+    graph (`kind = "session-start"`/`"session-update"`, `Lun.Session`) of a
+    ready build with a JSON request body. The driver's traces (stderr) come
+    back as `log`. -/
 def Builder.call (b : Builder) (id kind name : String) (request : String) : IO Answer := do
   let some s ← readStatus b.cfg id | return errorAnswer 404 "no such build"
   unless s.state == .ready do
     return errorAnswer 409 s!"the build is {s.state.toString}, not ready"
   let listed := s.description.bind fun d =>
-    (d.getObjValAs? (Array Json) (kind ++ "s")).toOption.map fun xs =>
+    (d.getObjValAs? (Array Json) (if kind == "function" then "functions" else "graphs")).toOption.map fun xs =>
       xs.any fun x => (x.getObjValAs? String "name").toOption == some name
-  unless listed == some true do return errorAnswer 404 s!"the build has no {kind} named '{name}'"
+  unless listed == some true do
+    return errorAnswer 404 s!"the build has no {if kind == "function" then "function" else "graph"} named '{name}'"
   let r ← Process.run (driverExe b.cfg id).toString #[kind, name] b.cfg.callTimeoutMs (input := request)
   let status := match r.exitCode with
     | some 0 => 200 | some 1 => 400 | none => 504 | some _ => 502

@@ -11,13 +11,21 @@ require linen from git "https://github.com/typednotes/linen" @ "v1.5.0"
 -- For `Liaison.Wire` only: liaison's wire format (`POST /v0/egress`), the
 -- module liaison's own server parses with. It is pure and imports none of
 -- liaison's HMAC, Postgres or egress code, so it adds no link arguments.
-require liaison from git "https://github.com/typednotes/liaison" @ "v0.5.0"
+require liaison from git "https://github.com/typednotes/liaison" @ "v0.5.1"
 
 package lun where
-  version := v!"0.1.0"
+  version := v!"0.2.0"
+
+-- The driver runtime, embedded in `Lun.Driver` with `include_str`. Lake does
+-- not see through `include_str`, so without this `needs` an edited runtime
+-- would leave the embedded copy stale.
+input_file driverRuntime where
+  path := "template/LunDriver/Runtime.lean"
+  text := true
 
 @[default_target]
 lean_lib Lun where
+  needs := #[driverRuntime]
 
 -- Named `LunTests` (module tree `LunTests.*`), not `Tests`: `linen` has its
 -- own `Tests.*` tree, and two packages declaring the same top-level module
@@ -28,3 +36,9 @@ lean_lib LunTests where
 @[default_target]
 lean_exe lun where
   root := `Main
+
+-- `Examples/Client.lean`: lun from a client's side (build a project, register
+-- a graph as a session, update its inputs). `Examples/run.sh` runs it against
+-- a local lun.
+lean_exe «lun-example» where
+  root := `Examples.Client

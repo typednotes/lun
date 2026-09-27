@@ -46,4 +46,4 @@ def main : IO Unit := do
   if allowLocal then IO.eprintln "lun: LOCAL MODE — file:// repositories and path dependencies accepted"
   if cfg.token.isNone then IO.eprintln "lun: LUN_TOKEN is not set — the API is unauthenticated"
   IO.println s!"lun listening on :{port}"
-  Network.WebApp.Server.run port (Lun.application builder)
+  Network.WebApp.Server.run port (Lun.application builder (← Lun.Sessions.new))

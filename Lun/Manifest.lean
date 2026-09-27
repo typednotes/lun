@@ -1,10 +1,10 @@
 /-
   Lun.Manifest — what a user project may depend on
 
-  A project lun builds may depend on **linen and nothing else**: the cells'
+  A project lun builds may depend on **linen and nothing else**: the functions'
   types (`Eff`, the effects, `Control.Reactive`) come from linen or the Lean
   distribution, and every other dependency would be code lun has not
-  vetted, run at build time and linked into the cells.
+  vetted, run at build time and linked into the functions.
 
   The check reads the project's committed `lake-manifest.json` — the lock
   file, which lists every package, transitive ones included — and requires

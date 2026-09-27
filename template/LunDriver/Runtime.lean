@@ -2,31 +2,31 @@
   LunDriver.Runtime — written by lun into every driver package; do not edit.
 
   A *driver* is the Lake package lun generates around a user project: one
-  module per declared cell, one per declared DAG, and an executable serving
+  module per declared function, one per declared graph, and an executable serving
   them over a stdin/stdout JSON protocol. This module is everything those
   generated modules share:
 
-  - `CellFn σ` — which function types can be cells, and how to call one on JSON
+  - `FunctionType σ` — which types a served function can have, and how to call one on JSON
     arguments: `α₁ → … → αₙ → Eff effs β` with every `αᵢ` `Lean.FromJson`, `β`
     `Lean.ToJson`, and `effs` runnable in `IO` (`Handlers effs IO`). A `Unit`
     argument takes no input.
-  - `lun_cell "name" := f : r"σ"` — the signature check, stricter than
+  - `lun_function "name" := f : r"σ"` — the signature check, stricter than
     elaboration:
     `f` must *be* a function of type `σ` (no coercion), non-dependent, ending in
     `Eff`, whose effects are all linen's vetted ones — `Trace`, `Error`, `HTTP`,
     `FileSystem` — handled by linen's own `Handler _ IO` instances (a project's
     own instance for one of them is refused), and free of `sorry`; then the
-    cell's implementation and typed reference.
-  - `lun_dag "name" := r#"program"#` — a DAG: a program in linen's
-    `Reactive IO Json` monad (`Control.Reactive`) over `input`s and the cells,
-    each cell applying like a function of observables (a `combineLatest` over
-    the cell). The check: the program is free of `sorry` and of the builder's
+    function's implementation and typed reference.
+  - `lun_graph "name" := r#"program"#` — a graph: a program in linen's
+    `Reactive IO Json` monad (`Control.Reactive`) over `input`s and the functions,
+    each function applying to observables (a `combineLatest` over
+    the function). The check: the program is free of `sorry` and of the builder's
     primitives (it is walked through every non-library constant it uses), and
-    the graph it builds consists of inputs and applications of declared cells
-    with their arity, nothing else (`Dag.ofGraph`). Every function of the
-    graph is then replaced by the declared cell its label names, so what runs
-    is only ever a declared, checked cell.
-  - Request text (signatures, DAG programs) is embedded as raw string literals
+    the graph it builds consists of inputs and applications of declared functions
+    with their arity, nothing else (`GraphImpl.ofGraph`). Every function of the
+    graph is then replaced by the declared function its label names, so what runs
+    is only ever a declared, checked function.
+  - Request text (signatures, graph programs) is embedded as raw string literals
     and parsed as exactly one term each (`parseEmbeddedTerm`), so it can never
     add commands to a generated module; messages still point into it.
   - `driverMain` — the executable's protocol (see its doc comment).
@@ -43,14 +43,14 @@ namespace LunDriver
 
 open Lean Control.Monad.Effect Control.Reactive
 
--- ── Which functions are cells ───────────────────────────────────────────────
+-- ── Which Lean functions lun serves ─────────────────────────────────────────
 
-/-- A function type a cell can have, and how to call such a function on JSON
+/-- A type a served function can have, and how to call such a function on JSON
     arguments. -/
-class CellFn (σ : Type 1) where
+class FunctionType (σ : Type 1) where
   /-- The argument types that take an input (`Unit` arguments do not). -/
   Args : List Type
-  /-- The value the cell produces. -/
+  /-- The value the function produces. -/
   Out : Type
   /-- `Args.length`. -/
   arity : Nat
@@ -59,27 +59,27 @@ class CellFn (σ : Type 1) where
   call : σ → List Json → IO Json
 
 /-- A `Unit` argument takes no input. -/
-instance (priority := high) instCellFnUnit {σ : Type 1} [CellFn σ] : CellFn (Unit → σ) where
-  Args := CellFn.Args σ
-  Out := CellFn.Out σ
-  arity := CellFn.arity σ
-  call f js := CellFn.call (f ()) js
+instance (priority := high) instFunctionTypeUnit {σ : Type 1} [FunctionType σ] : FunctionType (Unit → σ) where
+  Args := FunctionType.Args σ
+  Out := FunctionType.Out σ
+  arity := FunctionType.arity σ
+  call f js := FunctionType.call (f ()) js
 
 /-- A JSON-decodable argument takes one input. -/
-instance instCellFnArrow {α : Type} {σ : Type 1} [FromJson α] [CellFn σ] : CellFn (α → σ) where
-  Args := α :: CellFn.Args σ
-  Out := CellFn.Out σ
-  arity := CellFn.arity σ + 1
+instance instFunctionTypeArrow {α : Type} {σ : Type 1} [FromJson α] [FunctionType σ] : FunctionType (α → σ) where
+  Args := α :: FunctionType.Args σ
+  Out := FunctionType.Out σ
+  arity := FunctionType.arity σ + 1
   call f
     | j :: js => do
       match fromJson? j with
-      | .ok a => CellFn.call (f a) js
+      | .ok a => FunctionType.call (f a) js
       | .error e => throw (IO.userError s!"cannot decode argument {j.compress}: {e}")
     | [] => throw (IO.userError "missing argument")
 
 /-- The result: an effectful computation over a row runnable in `IO`. -/
-instance instCellFnEff {effs : List (Type → Type)} {β : Type} [Handlers effs IO] [ToJson β] :
-    CellFn (Eff effs β) where
+instance instFunctionTypeEff {effs : List (Type → Type)} {β : Type} [Handlers effs IO] [ToJson β] :
+    FunctionType (Eff effs β) where
   Args := []
   Out := β
   arity := 0
@@ -87,30 +87,46 @@ instance instCellFnEff {effs : List (Type → Type)} {β : Type} [Handlers effs 
     | [] => toJson <$> m.handle
     | _ => throw (IO.userError "too many arguments")
 
-/-- A checked cell, ready to run: its name, declared signature and JSON entry
+/-- A checked function, ready to run: its name, declared signature and JSON entry
     point. -/
-structure CellImpl where
+structure FunctionImpl where
   name : String
   signature : String
   arity : Nat
   call : List Json → IO Json
 
-/-- Package a function as a cell. -/
-def CellImpl.ofFn {σ : Type 1} [CellFn σ] (name signature : String) (f : σ) : CellImpl :=
-  { name, signature, arity := CellFn.arity σ, call := CellFn.call f }
+/-- Package a Lean function as a served one. -/
+def FunctionImpl.ofFn {σ : Type 1} [FunctionType σ] (name signature : String) (f : σ) : FunctionImpl :=
+  { name, signature, arity := FunctionType.arity σ, call := FunctionType.call f }
 
-/-- The cell as a function linen's reactive graphs can call: its arguments
-    are the node's sources, in order (a cell of no inputs reads one start
-    source, whose value it ignores). A failure is the node's `error`. -/
-def CellImpl.impl (c : CellImpl) : Impl IO Json := fun vs => do
-  try pure (.ok (some (← c.call (if c.arity == 0 then [] else vs))))
-  catch e => pure (.error (toString e))
+/-- Values travel through a graph wrapped: `{"ok": v}` for a value,
+    `{"error": e}` for a function that failed, `{"blocked": true}` for a function not
+    called because an argument has no value. Never as linen's `error`
+    notification, which would end the node's stream for good: in a session a
+    node that failed recovers when its inputs change. -/
+def okValue (v : Json) : Json := Json.mkObj [("ok", v)]
+
+/-- A function's failure, as a value (see `okValue`). -/
+def failedValue (e : String) : Json := Json.mkObj [("error", e)]
+
+/-- A function not called (see `okValue`). -/
+def blockedValue : Json := Json.mkObj [("blocked", true)]
+
+/-- The function as linen's reactive graphs call it: its arguments
+    are the node's sources, in order (a function of no inputs reads one start
+    source, whose value it ignores). It runs only if every argument is a
+    value; it never fails as far as linen is concerned (see `okValue`). -/
+def FunctionImpl.impl (c : FunctionImpl) : Impl IO Json := fun vs => do
+  let args := vs.filterMap fun v => (v.getObjVal? "ok").toOption
+  if args.length != vs.length then return .ok (some blockedValue)
+  try pure (.ok (some (okValue (← c.call (if c.arity == 0 then [] else args)))))
+  catch e => pure (.ok (some (failedValue (toString e))))
 
 -- ── The signature check ─────────────────────────────────────────────────────
 
 open Elab Command Term Meta
 
-/-- The effects a cell may use, each with the only `Handler _ IO` instance
+/-- The effects a function may use, each with the only `Handler _ IO` instance
     accepted for it (linen's). -/
 def allowedEffects : List (Name × Name) :=
   [ (``Control.Monad.Effect.Trace.Trace, ``Control.Monad.Effect.Trace.instHandlerTraceIO)
@@ -119,7 +135,7 @@ def allowedEffects : List (Name × Name) :=
   , (``Control.Monad.Effect.FileSystem.FileSystem,
       ``Control.Monad.Effect.FileSystem.instHandlerFileSystemIO) ]
 
-/-- The `Handler`/`Handlers` instances a cell's runner may be built from. -/
+/-- The `Handler`/`Handlers` instances a function's runner may be built from. -/
 def allowedInstances : List Name :=
   [``instHandlersNil, ``instHandlersCons] ++ allowedEffects.map Prod.snd
 
@@ -138,24 +154,24 @@ def checkInstance (inst : Expr) : MetaM Unit := do
     let some info := (← getEnv).find? c | continue
     let concl ← forallTelescope info.type fun _ b => pure b.getAppFn.constName?
     if (concl == some ``Handler || concl == some ``Handlers) && !allowedInstances.contains c then
-      throwError "the effect handler `{c}` is not one of linen's; a cell's effects must run \
+      throwError "the effect handler `{c}` is not one of linen's; a function's effects must run \
         with linen's own handlers"
 
-/-- The effect row and result a cell's signature ends in:
+/-- The effect row and result a function's signature ends in:
     `α₁ → … → αₙ → Eff effs β`, non-dependent. -/
-def cellRow (sig : Expr) : MetaM (Expr × Expr) :=
+def functionRow (sig : Expr) : MetaM (Expr × Expr) :=
   forallTelescopeReducing sig fun xs body => do
     for h : i in [0:xs.size] do
       let x := xs[i].fvarId!
       let later ← (xs.extract (i + 1) xs.size).mapM inferType
       if body.containsFVar x || later.any (·.containsFVar x) then
-        throwError "a cell's signature cannot be a dependent function type"
+        throwError "a function's signature cannot be a dependent function type"
     unless body.isAppOfArity ``Eff 2 do
-      throwError "a cell must return `Eff effs β`, not{indentExpr body}"
+      throwError "a function must return `Eff effs β`, not{indentExpr body}"
     return (body.getArg! 0, body.getArg! 1)
 
-/-- The signature check: `fn` is a cell of signature `sig`. -/
-def checkCell (fn : Ident) (sig : Term) : TermElabM Unit := do
+/-- The signature check: `fn` is a function of signature `sig`. -/
+def checkFunction (fn : Ident) (sig : Term) : TermElabM Unit := do
   let expected ← elabType sig
   synthesizeSyntheticMVarsNoPostponing
   let expected ← instantiateMVars expected
@@ -176,12 +192,12 @@ def checkCell (fn : Ident) (sig : Term) : TermElabM Unit := do
   unless head.isConstOf const do
     throwError "`{const}` has type{indentExpr info.type}\nwhich only matches the declared signature \
       through a coercion{indentExpr e}"
-  let (row, _) ← cellRow expected
+  let (row, _) ← functionRow expected
   for eff in ← listElems row do
     let some effName := eff.getAppFn.constName?
       | throwError "the effect{indentExpr eff}\nis not a named effect"
     let some (_, instName) := allowedEffects.find? (·.1 == effName)
-      | throwError "the effect `{effName}` is not allowed in a cell; allowed: \
+      | throwError "the effect `{effName}` is not allowed in a function; allowed: \
           {allowedEffects.map (·.1)}"
     let inst ← synthInstance (mkApp2 (mkConst ``Handler) eff (mkConst ``IO))
     unless inst.getAppFn.isConstOf instName do
@@ -191,60 +207,60 @@ def checkCell (fn : Ident) (sig : Term) : TermElabM Unit := do
   if (← collectAxioms const).contains ``sorryAx then
     throwError "`{const}` depends on `sorry`"
 
--- ── DAGs: inputs and cells as operators ─────────────────────────────────────
+-- ── Graphs: inputs and functions as operators ─────────────────────────────────────
 
-/-- The monad a DAG is written in: linen's reactive graphs, over JSON values,
-    running cells in `IO`. -/
-abbrev DagM : Type → Type := Reactive IO Json
+/-- The monad a graph is written in: linen's reactive graphs, over JSON values,
+    running functions in `IO`. -/
+abbrev GraphM : Type → Type := Reactive IO Json
 
 /-- The first component of every input's label. Not a valid identifier, so
-    no cell or input name can be mistaken for it. -/
+    no function or input name can be mistaken for it. -/
 def inputMarker : String := "#input"
 
-/-- The first component of the scope every cell application is built in. -/
-def cellMarker : String := "#cell"
+/-- The first component of the scope every function application is built in. -/
+def functionMarker : String := "#function"
 
 /-- The label of input `name`: `«#input».«name»` (after any enclosing
     `scope`). -/
 def inputLabel (name : String) : Name := .str (.str .anonymous inputMarker) name
 
-/-- The scope an application of cell `name` is built in. -/
-def cellScope (name : String) : Name := .str (.str .anonymous cellMarker) name
+/-- The scope an application of function `name` is built in. -/
+def functionScope (name : String) : Name := .str (.str .anonymous functionMarker) name
 
 /-- The input a subject's label names, if it is an input's. -/
 def inputOfLabel : Name → Option String
   | .str (.str _ m) n => if m == inputMarker then some n else none
   | _ => none
 
-/-- The cell a generated label belongs to, if it was generated inside a cell
-    application: `…«#cell».«name».kind.k`, `kind` being `fn` for the cell's
-    function and `subject` for the start source of a cell of no inputs. -/
-def cellOfLabel (kind : String) : Name → Option String
-  | .num (.str (.str (.str _ m) c) k) _ => if m == cellMarker && k == kind then some c else none
+/-- The function a generated label belongs to, if it was generated inside a function
+    application: `…«#function».«name».kind.k`, `kind` being `fn` for the function
+    itself and `subject` for the start source of a function of no inputs. -/
+def functionOfLabel (kind : String) : Name → Option String
+  | .num (.str (.str (.str _ m) c) k) _ => if m == functionMarker && k == kind then some c else none
   | _ => none
 
-/-- A new input: a subject named `name`, fed by the DAG request's
-    `inputs.name`. (In `LunDriver.Dsl`, which DAG modules open.) -/
-def Dsl.input (name : String) (α : Type) : DagM (Observable α) :=
+/-- A new input: a subject named `name`, fed by the graph request's
+    `inputs.name`. (In `LunDriver.Dsl`, which graph modules open.) -/
+def Dsl.input (name : String) (α : Type) : GraphM (Observable α) :=
   Subject.toObservable <$> Reactive.label (inputLabel name) (subject α)
 
-/-- Apply cell `c` to the nodes `ids`: a `combineLatest` over the cell's
-    function, labelled after the cell. A cell of no inputs gets a start
+/-- Apply function `c` to the nodes `ids`: a `combineLatest` over the function's
+    implementation, labelled after it. A function of no inputs gets a start
     source of its own instead, which the run feeds once. -/
-def applyCell (c : CellImpl) (β : Type) (ids : List NodeId) : DagM (Observable β) :=
-  Reactive.scope (cellScope c.name) do
+def applyFunction (c : FunctionImpl) (β : Type) (ids : List NodeId) : GraphM (Observable β) :=
+  Reactive.scope (functionScope c.name) do
     let ids ← if c.arity == 0 then (fun s => [s.toObservable.id]) <$> subject Unit else pure ids
     let f ← Reactive.register c.impl
     Reactive.addNode (.combineLatest f) ids β
 
-/-- The operator a DAG applies for a cell of signature `σ`: one observable
-    per input, then the cell's output (`Observable α₁ → … → DagM (Observable β)`,
-    or `DagM (Observable β)` for a cell of no inputs). -/
-abbrev CellRef (σ : Type 1) [CellFn σ] : Type := Combine IO Json (CellFn.Args σ) (CellFn.Out σ)
+/-- The operator a graph applies for a function of signature `σ`: one observable
+    per input, then the function's output (`Observable α₁ → … → GraphM (Observable β)`,
+    or `GraphM (Observable β)` for a function of no inputs). -/
+abbrev FunctionRef (σ : Type 1) [FunctionType σ] : Type := Combine IO Json (FunctionType.Args σ) (FunctionType.Out σ)
 
-/-- The operator of the cell `c`, of signature `σ`. -/
-def cellRef {σ : Type 1} [CellFn σ] (c : CellImpl) : CellRef σ :=
-  Combine.collect (applyCell c (CellFn.Out σ)) [] (CellFn.Args σ)
+/-- The operator of the function `c`, of signature `σ`. -/
+def functionRef {σ : Type 1} [FunctionType σ] (c : FunctionImpl) : FunctionRef σ :=
+  Combine.collect (applyFunction c (FunctionType.Out σ)) [] (FunctionType.Args σ)
 
 -- ── Embedded source text ────────────────────────────────────────────────────
 
@@ -279,45 +295,45 @@ def parseEmbeddedTerm (lit : StrLit) : CommandElabM Term := do
 def dottedName (s : String) : Name :=
   (s.splitOn ".").foldl Name.mkStr .anonymous
 
-/-- `lun_cell "name" := f : r"σ"` — check that `f` is a cell of signature `σ`
+/-- `lun_function "name" := f : r"σ"` — check that `f` is a function of signature `σ`
     (see the module documentation), then define its implementation
-    `LunDriver.Impl.name` and the operator DAGs apply, `LunDriver.Cells.name`
-    (`cellRef`). -/
-elab "lun_cell " name:str " := " fn:ident " : " sig:str : command => do
+    `LunDriver.Impl.name` and the operator graphs apply, `LunDriver.Functions.name`
+    (`functionRef`). -/
+elab "lun_function " name:str " := " fn:ident " : " sig:str : command => do
   let sigStx ← parseEmbeddedTerm sig
-  liftTermElabM (checkCell fn sigStx)
+  liftTermElabM (checkFunction fn sigStx)
   let n := dottedName name.getString
   let sigId := mkIdent (`LunDriver.Sig ++ n)
   let implId := mkIdent (`LunDriver.Impl ++ n)
-  let cellId := mkIdent (`LunDriver.Cells ++ n)
+  let functionId := mkIdent (`LunDriver.Functions ++ n)
   let sigText := Syntax.mkStrLit sig.getString
   elabCommand (← `(abbrev $sigId : Type 1 := $sigStx))
-  elabCommand (← `(def $implId : LunDriver.CellImpl :=
-    LunDriver.CellImpl.ofFn $name $sigText ($fn : $sigId)))
-  elabCommand (← `(def $cellId : LunDriver.CellRef $sigId := LunDriver.cellRef $implId))
+  elabCommand (← `(def $implId : LunDriver.FunctionImpl :=
+    LunDriver.FunctionImpl.ofFn $name $sigText ($fn : $sigId)))
+  elabCommand (← `(def $functionId : LunDriver.FunctionRef $sigId := LunDriver.functionRef $implId))
 
--- ── The DAG check ───────────────────────────────────────────────────────────
+-- ── The graph check ───────────────────────────────────────────────────────────
 
-/-- What a node of a DAG is. -/
+/-- What a node of a graph is. -/
 inductive NodeKind where
   /-- An input, by name. -/
   | input (name : String)
-  /-- The start source of the cell of no inputs that reads it (not shown). -/
+  /-- The start source of the function of no inputs that reads it (not shown). -/
   | start
-  /-- An application of a declared cell to the nodes `args` (graph indices). -/
-  | cell (name : String) (args : List Nat)
+  /-- An application of a declared function to the nodes `args` (graph indices). -/
+  | apply (name : String) (args : List Nat)
   deriving Inhabited, BEq, Repr
 
-/-- A checked DAG, ready to run: its graph, whose every function is a
-    declared cell's, and what each node is. -/
-structure Dag where
+/-- A checked graph, ready to run: its graph, whose every function is a
+    declared function's, and what each node is. -/
+structure GraphImpl where
   graph : Graph IO Json
   kinds : Array NodeKind
 
-/-- The builder's primitives, which a DAG may reach only through `input` and
-    the cells. (`Reactive.fnImpl` is linen ≥ 1.4.0, so it is named, not
+/-- The builder's primitives, which a graph may reach only through `input` and
+    the functions. (`Reactive.fnImpl` is linen ≥ 1.4.0, so it is named, not
     resolved: the runtime still compiles against linen 1.3.0.) -/
-def bannedInDag : List Name :=
+def bannedInGraph : List Name :=
   [ ``Reactive.register, ``Reactive.addNode, `Control.Reactive.Reactive.fnImpl, ``Reactive.fn
   , ``Builder.mk, ``Graph.mk, ``Graph.rebind, ``Operator.mk, ``Operator.splice ]
 
@@ -325,17 +341,17 @@ def bannedInDag : List Name :=
 def trustedModule (m : Name) : Bool :=
   [`Init, `Std, `Lean, `Linen].contains m.getRoot || m == `LunDriver.Runtime
 
-/-- `g` as a DAG of the declared `cells`, or what is wrong with it: every node
-    is an input or an application of a declared cell (by its function's label)
-    to as many nodes as the cell has inputs, and every function is a declared
-    cell's — which then replaces it, whatever the graph held. Input names are
+/-- `g` as a graph of the declared `functions`, or what is wrong with it: every node
+    is an input or an application of a declared function (by its function's label)
+    to as many nodes as the function has inputs, and every function is a declared
+    function's — which then replaces it, whatever the graph held. Input names are
     distinct because labels are. -/
-def Dag.ofGraph (cells : List CellImpl) (g : Graph IO Json) : Except String Dag := do
-  let cellOf (name : String) : Option CellImpl := cells.find? (·.name == name)
-  let fnCells ← g.fnLabels.toList.mapM fun l => match cellOfLabel "fn" l >>= cellOf with
+def GraphImpl.ofGraph (functions : List FunctionImpl) (g : Graph IO Json) : Except String GraphImpl := do
+  let functionOf (name : String) : Option FunctionImpl := functions.find? (·.name == name)
+  let fnImpls ← g.fnLabels.toList.mapM fun l => match functionOfLabel "fn" l >>= functionOf with
     | some c => pure c
-    | none => throw s!"the function `{l}` is not a declared cell; a DAG may apply only the \
-        declared cells"
+    | none => throw s!"the function `{l}` is not a declared function; a graph may apply only the \
+        declared functions"
   let describe (i : Nat) : String := s!"node {i} (`{g.label ⟨i⟩}`)"
   let mut kinds : Array NodeKind := #[]
   let mut startsRead : List Nat := []
@@ -344,10 +360,10 @@ def Dag.ofGraph (cells : List CellImpl) (g : Graph IO Json) : Except String Dag 
     match n.op with
     | .subject =>
       if let some name := inputOfLabel (g.label ⟨i⟩) then kinds := kinds.push (.input name)
-      else if (cellOfLabel "subject" (g.label ⟨i⟩)).isSome then kinds := kinds.push .start
+      else if (functionOfLabel "subject" (g.label ⟨i⟩)).isSome then kinds := kinds.push .start
       else throw s!"{describe i} is a subject that is not an `input`"
     | .combineLatest f =>
-      let some c := fnCells[f.idx]? | throw s!"{describe i} applies an unknown function"
+      let some c := fnImpls[f.idx]? | throw s!"{describe i} applies an unknown function"
       let args := n.args.map (·.idx)
       let isStart (j : Nat) : Bool := kinds[j]? == some .start
       if c.arity == 0 then
@@ -356,34 +372,34 @@ def Dag.ofGraph (cells : List CellImpl) (g : Graph IO Json) : Except String Dag 
           unless isStart j && !startsRead.contains j do
             throw s!"{describe i} applies '{c.name}', which takes no input, to a node"
           startsRead := j :: startsRead
-          kinds := kinds.push (.cell c.name [])
+          kinds := kinds.push (.apply c.name [])
         | _ => throw s!"{describe i} applies '{c.name}', which takes no input, to {args.length} nodes"
       else
         unless args.length == c.arity do
           throw s!"{describe i} applies '{c.name}' to {args.length} arguments; it takes {c.arity}"
         if args.any isStart then throw s!"{describe i} applies '{c.name}' to a start source"
-        kinds := kinds.push (.cell c.name args)
-    | op => throw s!"{describe i} uses the `{op.name}` operator; a DAG may only apply the \
-        declared cells to inputs and to each other"
+        kinds := kinds.push (.apply c.name args)
+    | op => throw s!"{describe i} uses the `{op.name}` operator; a graph may only apply the \
+        declared functions to inputs and to each other"
   for h : i in [0:kinds.size] do
     if kinds[i] == .start && !startsRead.contains i then throw s!"{describe i} is not read"
   let fns : Array (Impl IO Json) := Array.ofFn (n := g.fns.size) fun k =>
-    ((fnCells[k.val]?).map CellImpl.impl).getD fun _ => pure (.error "unknown function")
+    ((fnImpls[k.val]?).map FunctionImpl.impl).getD fun _ => pure (.error "unknown function")
   let graph : Graph IO Json :=
     ⟨g.nodes, fns, g.labels, g.fnLabels,
       by rw [Array.size_ofFn]; exact g.wellFormed, by rw [Array.size_ofFn]; exact g.labelled⟩
   return { graph, kinds }
 
-/-- Build a DAG program and check it (`Dag.ofGraph`). -/
-def Dag.ofReactive (cells : List CellImpl) (r : DagM Unit) : Except String Dag := do
+/-- Build a graph program and check it (`GraphImpl.ofGraph`). -/
+def GraphImpl.ofReactive (functions : List FunctionImpl) (r : GraphM Unit) : Except String GraphImpl := do
   let dup := s!"two nodes are labelled `{inputMarker}."
   let (_, g) ← r.build.mapError fun e =>
     if e.startsWith dup then s!"the input '{((e.drop dup.length).takeWhile (· != '`')).toString}' \
       is declared twice" else e
-  Dag.ofGraph cells g
+  GraphImpl.ofGraph functions g
 
-/-- The error of a DAG, if it has one: what the check evaluates. -/
-def Dag.error? (d : Except String Dag) : Option String :=
+/-- The error of a graph, if it has one: what the check evaluates. -/
+def GraphImpl.error? (d : Except String GraphImpl) : Option String :=
   match d with
   | .ok _ => none
   | .error e => some e
@@ -391,29 +407,29 @@ def Dag.error? (d : Except String Dag) : Option String :=
 unsafe def evalErrorUnsafe (n : Name) : TermElabM (Option String) := evalConst (Option String) n
 @[implemented_by evalErrorUnsafe] opaque evalError (n : Name) : TermElabM (Option String)
 
-/-- The cell operators the driver generated: in `LunDriver.Cells`, defined by
-    one of the generated `LunDriver.Cells.*` modules. -/
-def isCellRef (env : Environment) (c : Name) : Bool :=
+/-- The function operators the driver generated: in `LunDriver.Functions`, defined by
+    one of the generated `LunDriver.Functions.*` modules. -/
+def isFunctionRef (env : Environment) (c : Name) : Bool :=
   let generated := match env.getModuleIdxFor? c with
-    | some idx => (`LunDriver.Cells).isPrefixOf (env.header.moduleNames[idx.toNat]!)
+    | some idx => (`LunDriver.Functions).isPrefixOf (env.header.moduleNames[idx.toNat]!)
     | none => false
-  generated && (`LunDriver.Cells).isPrefixOf c &&
-    ((env.find? c).map (·.type.getAppFn.isConstOf ``CellRef)).getD false
+  generated && (`LunDriver.Functions).isPrefixOf c &&
+    ((env.find? c).map (·.type.getAppFn.isConstOf ``FunctionRef)).getD false
 
-/-- The DAG check: the definition `dagName` uses none of the builder's
+/-- The graph check: the definition `programName` uses none of the builder's
     primitives and no `sorry` (see the module documentation), and the error
-    `errorName` evaluates to — its graph checked by `Dag.ofGraph` — is none. -/
-def checkDag (dagName errorName : Name) : TermElabM Unit := do
+    `errorName` evaluates to — its graph checked by `GraphImpl.ofGraph` — is none. -/
+def checkGraph (programName errorName : Name) : TermElabM Unit := do
   let env ← getEnv
-  if (← collectAxioms dagName).contains ``sorryAx then throwError "the DAG depends on `sorry`"
+  if (← collectAxioms programName).contains ``sorryAx then throwError "the graph depends on `sorry`"
   -- Walk every constant the definition reaches, through everything that is
-  -- not library code, stopping at the generated cell operators.
+  -- not library code, stopping at the generated function operators.
   let trusted (c : Name) : Bool := match env.getModuleIdxFor? c with
     | some idx => trustedModule (env.header.moduleNames[idx.toNat]!)
     | none => false
-  let mut todo : List Name := [dagName]
+  let mut todo : List Name := [programName]
   let mut seen : NameSet := {}
-  -- A bound, not fuel: no DAG definition reaches a million constants.
+  -- A bound, not fuel: no graph definition reaches a million constants.
   for _ in [0:1000000] do
     match todo with
     | [] => break
@@ -422,126 +438,217 @@ def checkDag (dagName errorName : Name) : TermElabM Unit := do
       if seen.contains c then continue
       seen := seen.insert c
       let some info := env.find? c | continue
-      if info.isUnsafe then throwError "the DAG uses the unsafe `{c}`"
+      if info.isUnsafe then throwError "the graph uses the unsafe `{c}`"
       let some v := info.value? (allowOpaque := true) | continue
       for u in v.getUsedConstants ++ info.type.getUsedConstants do
-        if bannedInDag.contains u then
-          throwError "the DAG uses `{u}` (in `{c}`); a DAG may build nodes only with `input` \
-            and the declared cells"
-        unless trusted u || isCellRef env u || seen.contains u do
+        if bannedInGraph.contains u then
+          throwError "the graph uses `{u}` (in `{c}`); a graph may build nodes only with `input` \
+            and the declared functions"
+        unless trusted u || isFunctionRef env u || seen.contains u do
           todo := u :: todo
-  unless todo.isEmpty do throwError "the DAG is too large to check"
-  if let some e ← evalError errorName then throwError "invalid DAG: {e}"
+  unless todo.isEmpty do throwError "the graph is too large to check"
+  if let some e ← evalError errorName then throwError "invalid graph: {e}"
 
-/-- `lun_dag "name" := r#"program"#` — define the DAG `LunDriver.Dags.name`
-    from a `Reactive` program over the declared cells (and, checked,
+/-- `lun_graph "name" := r#"program"#` — define the graph `LunDriver.Programs.name`
+    from a `Reactive` program over the declared functions (and, checked,
     `LunDriver.Graphs.name`), then check it. -/
-elab "lun_dag " name:str " := " prog:str : command => do
+elab "lun_graph " name:str " := " prog:str : command => do
   let t ← parseEmbeddedTerm prog
   let n := dottedName name.getString
-  let dagName := `LunDriver.Dags ++ n
+  let programName := `LunDriver.Programs ++ n
   let graphName := `LunDriver.Graphs ++ n
-  let errorName := `LunDriver.DagErrors ++ n
-  let dagId := mkIdent dagName
+  let errorName := `LunDriver.GraphErrors ++ n
+  let programId := mkIdent programName
   let graphId := mkIdent graphName
   let errorId := mkIdent errorName
   let before := (← get).messages.toList.length
-  elabCommand (← `(def $dagId : LunDriver.DagM Unit := Functor.discard ($t)))
+  elabCommand (← `(def $programId : LunDriver.GraphM Unit := Functor.discard ($t)))
   -- An ill-typed program is already reported; checking its error-recovery
   -- stand-in would only add a spurious `sorry`.
   if (← get).messages.toList.drop before |>.any (·.severity == .error) then return
-  elabCommand (← `(def $graphId : Except String LunDriver.Dag :=
-    LunDriver.Dag.ofReactive $(mkIdent `LunDriver.cellImpls) $dagId))
-  elabCommand (← `(def $errorId : Option String := LunDriver.Dag.error? $graphId))
-  withRef prog <| liftTermElabM (checkDag dagName errorName)
+  elabCommand (← `(def $graphId : Except String LunDriver.GraphImpl :=
+    LunDriver.GraphImpl.ofReactive $(mkIdent `LunDriver.functionImpls) $programId))
+  elabCommand (← `(def $errorId : Option String := LunDriver.GraphImpl.error? $graphId))
+  withRef prog <| liftTermElabM (checkGraph programName errorName)
 
--- ── Running a DAG ───────────────────────────────────────────────────────────
+-- ── Running a graph: sessions ─────────────────────────────────────────────────
 
-/-- The nodes shown: inputs and cell applications, not start sources. Their
-    positions in this list are the ids a DAG's nodes are known by. -/
-def Dag.shown (d : Dag) : List Nat :=
+/-- The nodes shown: inputs and function applications, not start sources. Their
+    positions in this list are the ids a graph's nodes are known by. -/
+def GraphImpl.shown (d : GraphImpl) : List Nat :=
   (List.range d.kinds.size).filter fun i => d.kinds[i]? != some .start
 
 /-- The id of graph node `i` among the shown nodes. -/
-def Dag.idOf (d : Dag) (i : Nat) : Nat := (d.shown.idxOf? i).getD i
+def GraphImpl.idOf (d : GraphImpl) (i : Nat) : Nat := (d.shown.idxOf? i).getD i
 
-/-- One node, for `describe` and DAG results. -/
-def Dag.nodeJson (d : Dag) (i : Nat) : List (String × Json) :=
-  match d.kinds[i]? with
+/-- One node, for `describe` and graph results. -/
+def GraphImpl.nodeJson (d : GraphImpl) (i : Nat) : List (String × Json) :=
+  match (d.kinds[i]? : Option NodeKind) with
   | some (.input name) => [("id", d.idOf i), ("input", name)]
-  | some (.cell c args) => [("id", d.idOf i), ("cell", c), ("args", toJson (args.map d.idOf))]
+  | some (.apply c args) => [("id", d.idOf i), ("function", c), ("args", toJson (args.map d.idOf))]
   | _ => [("id", d.idOf i)]
 
-/-- The shown nodes a shown node reads. -/
-def Dag.argsOf (d : Dag) (i : Nat) : List Nat :=
-  match d.kinds[i]? with
-  | some (.cell _ args) => args
+/-- The nodes a node reads (graph indices). -/
+def GraphImpl.argsOf (d : GraphImpl) (i : Nat) : List Nat :=
+  match (d.kinds[i]? : Option NodeKind) with
+  | some (.apply _ args) => args
   | _ => []
 
-/-- What happened to a node in a run. -/
-inductive Outcome where
-  | value (v : Json)
-  | failed (message : String)
-  /-- It did not run: its argument (a graph index) has no value. -/
-  | skipped (arg : Nat)
+/-- The graph index of input `name`. -/
+def GraphImpl.inputIndex? (d : GraphImpl) (name : String) : Option Nat :=
+  (List.range d.kinds.size).find? fun i => d.kinds[i]? == some (.input name)
 
-/-- A DAG request: `{"inputs": {"name": value, …}}`. Every input and every
-    cell of no inputs is fed once, at time 0 (a missing input is fed an
-    `error`), and the graph runs to the end (linen's `Graph.runM`). The result
-    has one entry per shown node, in order, with its `output`, its own
-    `error`, or the node it was `skipped` because of: its first argument
-    without a value. -/
-def runDag (d : Dag) (req : Json) : IO (Except String Json) := do
-  let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
-  let occurrences : List (Occurrence Json) := (List.range d.kinds.size).filterMap fun i =>
-    match (d.kinds[i]? : Option NodeKind) with
-    | some (.input name) => some ⟨0, ⟨i⟩, match inputs.getObjVal? name with
-        | .ok v => .next v
-        | .error _ => .error s!"missing input '{name}'"⟩
-    | some .start => some ⟨0, ⟨i⟩, .next Json.null⟩
-    | _ => none
-  let trace ← d.graph.runM occurrences
-  let emitted (i : Nat) : Outcome :=
-    let events := (trace.events ⟨i⟩).map (·.2)
-    match events.reverse.findSome? (fun | .next v => some v | _ => none) with
-    | some v => .value v
-    | none => match events.findSome? (fun | .error e => some e | _ => none) with
-      | some e => .failed e
-      | none => .failed "no value"
-  let mut outcomes : Array Outcome := #[]
+/-- The graph's inputs, by name. -/
+def GraphImpl.inputNames (d : GraphImpl) : List String :=
+  d.kinds.toList.filterMap fun | .input n => some n | _ => none
+
+/-- A session's state between calls: linen's clock and every node's operator
+    state, and every node's outcome so far (`Outcome.toJson`, or `null` for a
+    node not computed yet). Plain JSON: lun stores it and hands it back. -/
+structure SessionState where
+  now : Nat
+  cells : Array (Control.Reactive.Cell Json)
+  outcomes : Array Json
+
+deriving instance ToJson, FromJson for Control.Reactive.Cell
+
+instance : ToJson SessionState where
+  toJson s := Json.mkObj
+    [("now", s.now), ("cells", toJson s.cells), ("outcomes", Json.arr s.outcomes)]
+
+/-- Read a session's state back, checking it is one of this graph's. -/
+def SessionState.ofJson (d : GraphImpl) (j : Json) : Except String SessionState := do
+  let s : SessionState :=
+    { now := ← j.getObjValAs? Nat "now", cells := ← j.getObjValAs? (Array (Control.Reactive.Cell Json)) "cells"
+      outcomes := ← j.getObjValAs? (Array Json) "outcomes" }
+  unless s.cells.size == d.graph.size && s.outcomes.size == d.graph.size do
+    throw "the session's state is not one of this graph's"
+  return s
+
+/-- A node's outcome, from the value it last emitted: `{"output": v}`, its
+    function's `{"error": e}`, or `{"skipped": j}` (`j` its first argument without
+    a value); `outcomes` holds the outcomes of the nodes before it. -/
+def GraphImpl.outcomeOf (d : GraphImpl) (outcomes : Array Json) (i : Nat) (v : Json) : Json :=
+  match v.getObjVal? "ok", v.getObjValAs? String "error" with
+  | .ok out, _ => Json.mkObj [("output", out)]
+  | _, .ok e => Json.mkObj [("error", e)]
+  | _, _ =>
+    let hasValue (j : Nat) : Bool := ((outcomes[j]?).bind (·.getObjVal? "output" |>.toOption)).isSome
+    match (d.argsOf i).find? (!hasValue ·) with
+    | some j => Json.mkObj [("skipped", d.idOf j)]
+    | none => Json.mkObj [("error", "no value")]
+
+/-- The value an input is fed: its value, or (`none`) a missing input's error. -/
+def inputValue (v : Option Json) (name : String) : Json :=
+  match v with
+  | some v => okValue v
+  | none => failedValue s!"missing input '{name}'"
+
+/-- Feed occurrences — `(graph index, value)`, all at one new instant of the
+    session's clock, in order — and return the new state and the shown nodes
+    whose outcome changed. Only nodes downstream of what is fed run: linen's
+    `Session`, restored from the state, with the operators' state kept. -/
+def GraphImpl.feed (d : GraphImpl) (st : SessionState) (occurrences : List (Nat × Json)) :
+    IO (SessionState × List Nat) := do
+  let t := st.now + 1
+  let s : Session Json := { d.graph.start with now := st.now, cells := st.cells }
+  let s ← d.graph.pushAll s (occurrences.map fun (i, v) => ⟨t, ⟨i⟩, .next v⟩)
+  let last (i : Nat) : Option Json :=
+    ((s.streams[i]?).map (·.toList.reverse)).bind fun es =>
+      es.findSome? fun (_, n) => match n with | .next v => some v | _ => none
+  let mut outcomes := st.outcomes
   for i in [0:d.kinds.size] do
-    let blocked := (d.argsOf i).find? fun j => match outcomes[j]? with
-      | some (.value _) => false
-      | _ => true
-    outcomes := outcomes.push (match blocked with
-      | some j => .skipped j
-      | none => emitted i)
-  let nodes := d.shown.map fun i =>
-    let result : List (String × Json) := match (outcomes[i]? : Option Outcome) with
-      | some (.value v) => [("output", v)]
-      | some (.failed e) => [("error", e)]
-      | some (.skipped j) => [("skipped", d.idOf j)]
-      | none => []
-    Json.mkObj (d.nodeJson i ++ result)
-  pure (.ok (Json.mkObj [("nodes", Json.arr nodes.toArray)]))
+    if let some v := last i then outcomes := outcomes.set! i (d.outcomeOf outcomes i v)
+  let changed := d.shown.filter fun i => outcomes[i]? != st.outcomes[i]?
+  return ({ now := t, cells := s.cells, outcomes }, changed)
 
-/-- The build's cells and DAGs, with each DAG's structure: its nodes, its
+/-- A new session: the state of a graph no value has reached yet. -/
+def GraphImpl.initial (d : GraphImpl) : SessionState :=
+  { now := 0, cells := (d.graph.start (V := Json)).cells
+    outcomes := Array.replicate d.graph.size Json.null }
+
+/-- The start sources, each fed once when a session starts. -/
+def GraphImpl.starts (d : GraphImpl) : List (Nat × Json) :=
+  (List.range d.kinds.size).filterMap fun i =>
+    if d.kinds[i]? == some .start then some (i, okValue Json.null) else none
+
+/-- The occurrences for `{"name": value, …}`: every name must be an input. -/
+def GraphImpl.occurrencesOf (d : GraphImpl) (inputs : Json) : Except String (List (Nat × Json)) := do
+  let kvs ← match inputs with
+    | .obj kvs => pure kvs.toList
+    | .null => pure []
+    | _ => throw "\"inputs\" must be an object"
+  kvs.mapM fun (name, v) => match d.inputIndex? name with
+    | some i => pure (i, okValue v)
+    | none => throw s!"the graph has no input named '{name}'; its inputs: {d.inputNames}"
+
+/-- The shown nodes `is`, each with its outcome. -/
+def GraphImpl.nodesJson (d : GraphImpl) (st : SessionState) (is : List Nat) : Json :=
+  Json.arr <| is.toArray.map fun i =>
+    let result := match st.outcomes[i]? with
+      | some (.obj kvs) => kvs.toList
+      | _ => []
+    Json.mkObj (d.nodeJson i ++ result)
+
+/-- A graph request, stateless: `{"inputs": {"name": value, …}}`. A session
+    started with every input (a missing one fed an error) and its every node,
+    in order, with its `output`, its own `error`, or the node it was `skipped`
+    because of: its first argument without a value. -/
+def runGraph (d : GraphImpl) (req : Json) : IO (Except String Json) := do
+  let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
+  let fed := d.inputNames.map fun name =>
+    ((d.inputIndex? name).getD 0, inputValue (inputs.getObjVal? name).toOption name)
+  let (st, _) ← d.feed d.initial (d.starts ++ fed)
+  pure (.ok (Json.mkObj [("nodes", d.nodesJson st d.shown)]))
+
+/-- Start a session: `{"inputs": {…}}` (optional; inputs not given are not fed,
+    so what depends on them has no outcome yet). The answer: the state, and
+    every node. -/
+def sessionStart (d : GraphImpl) (req : Json) : IO (Except String Json) := do
+  match d.occurrencesOf ((req.getObjVal? "inputs").toOption.getD .null) with
+  | .error e => pure (.error e)
+  | .ok occ =>
+    let (st, _) ← d.feed d.initial (d.starts ++ occ)
+    pure (.ok (Json.mkObj [("state", toJson st), ("nodes", d.nodesJson st d.shown)]))
+
+/-- Update a session: `{"state": …, "inputs": {…}}`. The answer: the new state,
+    every node, and the nodes whose outcome changed (`changed`), in order.
+    Several inputs are fed in order, at one instant of the session's clock: a
+    function reading two of them may run for the intermediate state too; only the
+    final outcomes are reported. -/
+def sessionUpdate (d : GraphImpl) (req : Json) : IO (Except String Json) := do
+  match (req.getObjVal? "state" >>= SessionState.ofJson d),
+      d.occurrencesOf ((req.getObjVal? "inputs").toOption.getD .null) with
+  | .error e, _ | _, .error e => pure (.error e)
+  | .ok st, .ok occ =>
+    -- An input given the value it already has changes nothing: not fed, so
+    -- no function downstream of it runs again.
+    let occ := occ.filter fun (i, v) =>
+      match st.outcomes[i]?, v.getObjVal? "ok" with
+      | some o, .ok x => o != Json.mkObj [("output", x)]
+      | _, _ => true
+    let (st, changed) ← d.feed st occ
+    pure (.ok (Json.mkObj [("state", toJson st), ("nodes", d.nodesJson st d.shown)
+                         , ("changed", d.nodesJson st changed)]))
+
+/-- The build's functions and graphs, with each graph's structure: its nodes, its
     sources (nodes reading none) and its sinks (nodes none reads). -/
-def describe (cells : List CellImpl) (dags : List (String × Dag)) : Json :=
+def describe (functions : List FunctionImpl) (graphs : List (String × GraphImpl)) : Json :=
   Json.mkObj
-    [ ("cells", Json.arr (cells.map fun c => Json.mkObj
+    [ ("functions", Json.arr (functions.map fun c => Json.mkObj
         [("name", c.name), ("signature", c.signature), ("arity", c.arity)]).toArray)
-    , ("dags", Json.arr (dags.map fun (name, d) =>
+    , ("graphs", Json.arr (graphs.map fun (name, d) =>
         let read := d.shown.flatMap d.argsOf
         Json.mkObj
           [ ("name", name)
+          , ("inputs", toJson d.inputNames)
           , ("nodes", Json.arr (d.shown.map fun i => Json.mkObj (d.nodeJson i)).toArray)
           , ("sources", toJson ((d.shown.filter fun i => (d.argsOf i).isEmpty).map d.idOf))
           , ("sinks", toJson ((d.shown.filter fun i => !read.contains i).map d.idOf)) ]).toArray) ]
 
 -- ── The protocol ────────────────────────────────────────────────────────────
 
-/-- The arguments of one call, from its input: nothing for a cell of no
+/-- The arguments of one call, from its input: nothing for a function of no
     inputs, the value itself for one input, a JSON array of `arity` values
     otherwise. -/
 def argsOf (arity : Nat) (input : Option Json) : Except String (List Json) :=
@@ -559,16 +666,16 @@ def outcomeJson (r : Except String Json) : Json :=
   | .ok v => Json.mkObj [("output", v)]
   | .error e => Json.mkObj [("error", e)]
 
-/-- Run a cell, turning every failure into an `Except`. -/
-def CellImpl.run (c : CellImpl) (input : Option Json) : IO (Except String Json) := do
+/-- Run a function, turning every failure into an `Except`. -/
+def FunctionImpl.run (c : FunctionImpl) (input : Option Json) : IO (Except String Json) := do
   match argsOf c.arity input with
   | .error e => pure (.error e)
   | .ok args =>
     try pure (.ok (← c.call args)) catch e => pure (.error (toString e))
 
-/-- A cell request: `{"input": x}` (one call; omitted for a cell of no
+/-- A function request: `{"input": x}` (one call; omitted for a function of no
     inputs) or `{"inputs": [x₁, x₂, …]}` (one call per element). -/
-def runCell (c : CellImpl) (req : Json) : IO (Except String Json) := do
+def runFunction (c : FunctionImpl) (req : Json) : IO (Except String Json) := do
   match req.getObjVal? "inputs" with
   | .ok (.arr xs) =>
     let outs ← xs.mapM fun x => outcomeJson <$> c.run (some x)
@@ -579,16 +686,19 @@ def runCell (c : CellImpl) (req : Json) : IO (Except String Json) := do
     pure (.ok (outcomeJson (← c.run input)))
 
 /-- The driver's protocol. One JSON request on stdin, one JSON response on
-    stdout; cells' traces go to stderr.
+    stdout; functions' traces go to stderr.
 
-    - `describe` — the cells and DAGs (no stdin).
-    - `cell NAME` — a cell request (`runCell`).
-    - `dag NAME` — a DAG request (`runDag`).
+    - `describe` — the functions and graphs (no stdin).
+    - `function NAME` — a function request (`runFunction`).
+    - `graph NAME` — a graph request (`runGraph`), stateless.
+    - `session-start NAME` / `session-update NAME` — a session of a graph
+      (`sessionStart`, `sessionUpdate`): its state travels in the request and
+      the response, and lun keeps it between calls.
 
     Exit code `0` for a response (which may report per-call errors), `1` for a
     request that could not be served (`{"error": …}` on stdout), `2` for a bad
     command line. -/
-def driverMain (cells : List CellImpl) (dags : List (String × Except String Dag))
+def driverMain (functions : List FunctionImpl) (graphs : List (String × Except String GraphImpl))
     (args : List String) :
     IO UInt32 := do
   let respond (r : Except String Json) : IO UInt32 := do
@@ -600,24 +710,36 @@ def driverMain (cells : List CellImpl) (dags : List (String × Except String Dag
     pure (if text.trimAscii.isEmpty then .ok (Json.mkObj []) else Json.parse text)
   match args with
   | ["describe"] =>
-    match dags.findSome? fun (name, d) => (Dag.error? d).map (name, ·) with
-    | some (name, e) => respond (.error s!"DAG '{name}': {e}")
-    | none => respond (.ok (describe cells (dags.filterMap fun (n, d) => d.toOption.map (n, ·))))
-  | ["cell", name] =>
-    match cells.find? (·.name == name) with
-    | none => respond (.error s!"no cell named '{name}'")
+    match graphs.findSome? fun (name, d) => (GraphImpl.error? d).map (name, ·) with
+    | some (name, e) => respond (.error s!"graph '{name}': {e}")
+    | none => respond (.ok (describe functions (graphs.filterMap fun (n, d) => d.toOption.map (n, ·))))
+  | ["function", name] =>
+    match functions.find? (·.name == name) with
+    | none => respond (.error s!"no function named '{name}'")
     | some c => match ← request with
       | .error e => respond (.error s!"request is not JSON: {e}")
-      | .ok req => respond (← runCell c req)
-  | ["dag", name] =>
-    match dags.lookup name with
-    | none => respond (.error s!"no DAG named '{name}'")
-    | some (.error e) => respond (.error s!"DAG '{name}': {e}")
+      | .ok req => respond (← runFunction c req)
+  | ["graph", name] =>
+    match graphs.lookup name with
+    | none => respond (.error s!"no graph named '{name}'")
+    | some (.error e) => respond (.error s!"graph '{name}': {e}")
     | some (.ok d) => match ← request with
       | .error e => respond (.error s!"request is not JSON: {e}")
-      | .ok req => respond (← runDag d req)
+      | .ok req => respond (← runGraph d req)
+  | [command, name] =>
+    let run? : Option (GraphImpl → Json → IO (Except String Json)) := match command with
+      | "session-start" => some sessionStart
+      | "session-update" => some sessionUpdate
+      | _ => none
+    match run?, graphs.lookup name with
+    | none, _ => IO.eprintln s!"unknown command '{command}'"; pure 2
+    | some _, none => respond (.error s!"no graph named '{name}'")
+    | some _, some (.error e) => respond (.error s!"graph '{name}': {e}")
+    | some run, some (.ok d) => match ← request with
+      | .error e => respond (.error s!"request is not JSON: {e}")
+      | .ok req => respond (← run d req)
   | _ =>
-    IO.eprintln "usage: lun-driver (describe | cell NAME | dag NAME)"
+    IO.eprintln "usage: lun-driver (describe | function NAME | graph NAME | session-start NAME | session-update NAME)"
     pure 2
 
 end LunDriver

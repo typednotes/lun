@@ -1,11 +1,11 @@
 /-
-  Lun.Diagnostics — lake's output, as diagnostics about cells and DAGs
+  Lun.Diagnostics — lake's output, as diagnostics about functions and graphs
 
   `lake build` prints each message as `error: FILE:LINE:COL: text`, the text
   possibly continuing on following lines. Because the driver has one module
-  per cell and per DAG (`Lun.Driver`), the file alone says what a message is
-  about: `LunDriver/Cells/C<i>.lean` is cell `i`, `LunDriver/Dags/D<j>.lean`
-  is DAG `j` (whose line numbers are translated back into the DAG program),
+  per function and per graph (`Lun.Driver`), the file alone says what a message is
+  about: `LunDriver/Functions/F<i>.lean` is function `i`, `LunDriver/Graphs/G<j>.lean`
+  is graph `j` (whose line numbers are translated back into the graph program),
   any other driver file is lun's own fault, and anything else is the
   project's.
 -/
@@ -17,10 +17,10 @@ open Lean (Json ToJson toJson)
 
 /-- What a message is about. -/
 inductive Scope where
-  /-- The cell at this index in the request. -/
-  | cell (index : Nat)
-  /-- The DAG at this index in the request. -/
-  | dag (index : Nat)
+  /-- The function at this index in the request. -/
+  | function (index : Nat)
+  /-- The graph at this index in the request. -/
+  | graph (index : Nat)
   /-- The user project itself (its own modules failed to build). -/
   | project
   /-- lun's generated code — a lun bug, or a project whose linen is too old. -/
@@ -73,7 +73,7 @@ def parse (log : String) : List Diagnostic :=
   let all := (match cur with | some d => d :: done | none => done).reverse
   all.map fun d => { d with message := d.message.trimAsciiEnd.toString }
 
-/-- `LunDriver/Cells/C12.lean` ↦ `12`, for `kind = "Cells"`, `letter = "C"`. -/
+/-- `LunDriver/Functions/F12.lean` ↦ `12`, for `kind = "Functions"`, `letter = "F"`. -/
 private def indexIn (file kind letter : String) : Option Nat :=
   let pfx := s!"LunDriver/{kind}/{letter}"
   let file := if file.startsWith "./" then (file.drop 2).toString else file
@@ -86,15 +86,15 @@ def Diagnostic.scope (d : Diagnostic) : Scope :=
   match d.file with
   | none => .build
   | some f =>
-    match indexIn f "Cells" "C", indexIn f "Dags" "D" with
-    | some i, _ => .cell i
-    | _, some j => .dag j
+    match indexIn f "Functions" "F", indexIn f "Graphs" "G" with
+    | some i, _ => .function i
+    | _, some j => .graph j
     | _, _ =>
       let f := if f.startsWith "./" then (f.drop 2).toString else f
       if f.startsWith "LunDriver/" then .driver else .project
 
-/-- Translate a DAG module position to a position in the DAG program, given
-    where the program starts (`Lun.Driver.dagProgramStart`). -/
+/-- Translate a graph module position to a position in the graph program, given
+    where the program starts (`Lun.Driver.graphProgramStart`). -/
 def Diagnostic.inProgram (d : Diagnostic) (start : Nat × Nat) : Diagnostic :=
   match d.line, d.column with
   | some l, some c =>
@@ -107,7 +107,7 @@ def Diagnostic.inProgram (d : Diagnostic) (start : Nat × Nat) : Diagnostic :=
 def linenTooOldHint (d : Diagnostic) : Option String :=
   if (d.message.splitOn "Linen.Control.Reactive").length > 1 ||
      (d.message.splitOn "Linen.Control.Monad.Effect.Handler").length > 1 then
-    some "the project's linen predates 1.3.0, which lun's cells and DAGs need"
+    some "the project's linen predates 1.3.0, which lun's functions and graphs need"
   else none
 
 instance : ToJson Diagnostic where

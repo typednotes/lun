@@ -37,9 +37,9 @@ def declComponent (s : String) : Bool :=
 def dotted (component : String → Bool) (maxLen : Nat := 256) (s : String) : Bool :=
   s.length ≤ maxLen && (s.splitOn ".").all component
 
-/-- A cell or DAG name: dotted identifiers, e.g. `math.double`. Also a Lean
-    name in the generated driver, and what a DAG program calls the cell by. -/
-def cellName (s : String) : Bool := dotted identComponent 128 s
+/-- A function or graph name: dotted identifiers, e.g. `math.double`. Also a Lean
+    name in the generated driver, and what a graph program calls the function by. -/
+def functionName (s : String) : Bool := dotted identComponent 128 s
 
 /-- A Lean module name, e.g. `MyProject.Math`. -/
 def moduleName (s : String) : Bool := dotted identComponent 256 s
@@ -80,7 +80,7 @@ def projectPath (s : String) : Bool :=
 
 -- ── Embedded Lean text ──────────────────────────────────────────────────────
 
-/-- Lean source a request embeds (a signature, a DAG program): no NUL and no
+/-- Lean source a request embeds (a signature, a graph program): no NUL and no
     control characters other than newline and tab. The driver parses it as
     exactly one term, so this is hygiene, not the safety boundary. -/
 def leanText (s : String) (multiline : Bool) (maxLen : Nat := 65536) : Bool :=

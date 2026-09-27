@@ -18,8 +18,8 @@ namespace LunTests.Build
 
 def status : Status :=
   { id := "".pushn 'a' 64, state := .ready, source := Json.mkObj [("commit", "x")]
-    diagnostics := #[Json.mkObj [("scope", "cell")]]
-    description := some (Json.mkObj [("cells", Json.arr #[Json.mkObj [("name", "c")]]), ("dags", Json.arr #[])]) }
+    diagnostics := #[Json.mkObj [("scope", "function")]]
+    description := some (Json.mkObj [("functions", Json.arr #[Json.mkObj [("name", "c")]]), ("graphs", Json.arr #[])]) }
 
 #guard match Status.ofJson (toJson status) with
   | .ok s => s.id == status.id && s.state == .ready && s.diagnostics.size == 1 &&
@@ -29,11 +29,11 @@ def status : Status :=
   | .ok s => s.state == .failed && s.error == some "boom" && s.description.isNone
   | .error _ => false
 
--- Errors are always reported; warnings only about cells and DAGs.
+-- Errors are always reported; warnings only about functions and graphs.
 def diag (sev : String) (file : String) : Diagnostics.Diagnostic :=
   { severity := sev, file := some file, line := some 1, column := some 0, message := "m" }
 #guard reportable (diag "error" "Fixture/X.lean")
 #guard !reportable (diag "warning" "Fixture/X.lean")
-#guard reportable (diag "warning" "LunDriver/Cells/C0.lean")
+#guard reportable (diag "warning" "LunDriver/Functions/F0.lean")
 
 end LunTests.Build

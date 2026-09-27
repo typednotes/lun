@@ -11,15 +11,15 @@ namespace LunTests.Validate
 
 -- ── Names ───────────────────────────────────────────────────────────────────
 
-#guard cellName "math.double"
-#guard cellName "_x.y_1"
-#guard !cellName ""
-#guard !cellName "math..double"
-#guard !cellName "1x"
-#guard !cellName "a-b"
-#guard !cellName "a b"
-#guard !cellName "«a»"
-#guard !cellName ("a" ++ "".pushn 'b' 200)
+#guard functionName "math.double"
+#guard functionName "_x.y_1"
+#guard !functionName ""
+#guard !functionName "math..double"
+#guard !functionName "1x"
+#guard !functionName "a-b"
+#guard !functionName "a b"
+#guard !functionName "«a»"
+#guard !functionName ("a" ++ "".pushn 'b' 200)
 
 #guard moduleName "MyProject.Math"
 #guard !moduleName "MyProject/Math"

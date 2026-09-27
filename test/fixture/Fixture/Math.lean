@@ -1,5 +1,5 @@
 /-
-  Functions the end-to-end test declares as cells.
+  Functions the end-to-end test declares as functions.
 -/
 import Lean.Data.Json
 import Linen.Control.Monad.Effect
@@ -10,15 +10,15 @@ namespace Fixture
 
 open Control.Monad.Effect
 
-/-- A pure cell of one argument. -/
+/-- A pure function of one argument. -/
 def double (n : Nat) : Eff [] Nat := pure (2 * n)
 
-/-- A cell of two arguments that traces. -/
+/-- A function of two arguments that traces. -/
 def add (a b : Nat) : Eff [Trace.Trace] Nat := do
   Trace.trace s!"adding {a} and {b}"
   pure (a + b)
 
-/-- A source cell: its argument is `Unit`, so it needs no input. -/
+/-- A source function: its argument is `Unit`, so it needs no input. -/
 def seed : Unit → Eff [] Nat := fun _ => pure 10
 
 /-- A structured argument, through `Lean.FromJson`/`ToJson`. -/
@@ -27,7 +27,7 @@ structure Point where
   y : Int
   deriving Lean.ToJson, Lean.FromJson
 
-/-- A cell that may fail. -/
+/-- A function that may fail. -/
 def norm1 (p : Point) : Eff [Error.Error String] Nat :=
   if p.x == 0 then Error.throwError "x is zero" else pure (p.x.natAbs + p.y.natAbs)
 

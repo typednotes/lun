@@ -12,15 +12,15 @@ namespace LunTests.Spec
 
 def commit := "dc19b371d09f409810678d8b35dbb381afecf272"
 
-def cell (name : String := "math.double") (fn : String := "P.double") : Json := Json.mkObj
+def function (name : String := "math.double") (fn : String := "P.double") : Json := Json.mkObj
   [("name", name), ("module", "P.Math"), ("function", fn), ("signature", "Nat → Eff [] Nat")]
 
-def request (source : List (String × Json) := []) (cells : List Json := [cell])
-    (dags : List Json := []) (extra : List (String × Json) := []) : Json :=
+def request (source : List (String × Json) := []) (functions : List Json := [function])
+    (graphs : List Json := []) (extra : List (String × Json) := []) : Json :=
   Json.mkObj <|
     [ ("source", Json.mkObj (([("url", "https://github.com/o/r"), ("branch", "main"),
         ("commit", commit)] : List (String × Json)) ++ source))
-    , ("cells", Json.arr cells.toArray), ("dags", Json.arr dags.toArray) ] ++ extra
+    , ("functions", Json.arr functions.toArray), ("graphs", Json.arr graphs.toArray) ] ++ extra
 
 def err (j : Json) (allowLocal := false) : String :=
   match BuildSpec.parse j allowLocal with
@@ -31,8 +31,8 @@ def err (j : Json) (allowLocal := false) : String :=
 def mentions (j : Json) (s : String) : Bool := ((err j).splitOn s).length > 1
 
 #guard err (request) == "ok"
-#guard ((BuildSpec.parse (request (dags := [Json.mkObj [("name", "main"), ("program", "do\n  pure ()")]]))).toOption.map
-  (·.dags.length)) == some 1
+#guard ((BuildSpec.parse (request (graphs := [Json.mkObj [("name", "main"), ("program", "do\n  pure ()")]]))).toOption.map
+  (·.graphs.length)) == some 1
 #guard (BuildSpec.parse (request (extra := [("open", Json.arr #["P"])]))).toOption.map (·.opens) == some ["P"]
 #guard (BuildSpec.parse (request (source := [("path", "lean")]))).toOption.map (·.source.path) == some "lean"
 
@@ -42,13 +42,13 @@ def mentions (j : Json) (s : String) : Bool := ((err j).splitOn s).length > 1
 #guard mentions (request (source := [("branch", "-x")])) "source.branch"
 #guard mentions (request (source := [("path", "../x")])) "source.path"
 #guard mentions (request (source := [("url", "ssh://github.com/o/r")])) "source.url"
-#guard mentions (request (cells := [])) "at least one cell"
-#guard mentions (request (cells := [cell "bad name"])) "cells[0].name"
-#guard mentions (request (cells := [cell (fn := "a b")])) "cells[0].function"
-#guard mentions (request (cells := [cell, cell])) "declared twice"
-#guard mentions (request (cells := [Json.mkObj [("name", "x"), ("module", "M"), ("function", "f"),
+#guard mentions (request (functions := [])) "at least one function"
+#guard mentions (request (functions := [function "bad name"])) "functions[0].name"
+#guard mentions (request (functions := [function (fn := "a b")])) "functions[0].function"
+#guard mentions (request (functions := [function, function])) "declared twice"
+#guard mentions (request (functions := [Json.mkObj [("name", "x"), ("module", "M"), ("function", "f"),
   ("signature", "Nat\n→ Nat")]])) "signature"
-#guard mentions (request (dags := [Json.mkObj [("name", "d"), ("program", 3)]])) "dags[0].program"
+#guard mentions (request (graphs := [Json.mkObj [("name", "d"), ("program", 3)]])) "graphs[0].program"
 #guard mentions (request (extra := [("open", Json.arr #["a b"])])) "open"
 #guard mentions (request (source := [("url", "file:///tmp/r")])) "local mode"
 #guard err (request (source := [("url", "file:///tmp/r")])) (allowLocal := true) == "ok"

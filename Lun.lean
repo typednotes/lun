@@ -6,4 +6,5 @@ import Lun.Diagnostics
 import Lun.Process
 import Lun.Fetch
 import Lun.Build
+import Lun.Session
 import Lun.Server

@@ -1,14 +1,17 @@
 # lun — agent notes
 
 `lun` compiles a Lean project (a git repository at a commit) into typed
-services: one per cell (a function under a declared signature) and one per DAG
-of cells (a program in linen's `Reactive` monad). See `README.md` for the API.
+services: one per declared **function** (a Lean function under a declared
+signature) and one per **graph** of functions (a program in linen's
+`Reactive` monad), which can also run as a live **session** (update some
+inputs, get back what changed). The vocabulary is linen's: functions, graphs,
+inputs, nodes, sessions. See `README.md` for the API.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
 Built on `linen` (pinned `v1.5.0` for lun itself; user projects need
 linen ≥ `1.3.0`, the first with the `Control.Reactive` the runtime uses).
 Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
-`v0.5.0`).
+`v0.5.1`).
 
 ## Layout
 
@@ -22,23 +25,28 @@ Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
 - `Lun/Manifest.lean` — the project may depend on linen only (read from its
   committed `lake-manifest.json`).
 - `Lun/Driver.lean` — the generated driver package (`files`): one module per
-  cell and per DAG. Embeds `template/LunDriver/Runtime.lean` with
-  `include_str`. Pure.
+  function and per graph. Embeds `template/LunDriver/Runtime.lean` with
+  `include_str` (tracked by the lakefile's `input_file driverRuntime`, so an
+  edited runtime rebuilds `Lun.Driver`). Pure.
 - `template/LunDriver/Runtime.lean` — **the driver runtime**, copied into
-  every driver. `CellFn` (which function types are cells and how to call them
-  on JSON), DAGs over linen's `Control.Reactive` (`input`, in
-  `LunDriver.Dsl`, and each cell as an operator: a `combineLatest` over the
-  cell, built in the scope `«#cell».«name»` so its function's label names the
-  cell), the `lun_cell` and `lun_dag` commands (the signature and DAG checks,
-  as elaborators; `Dag.ofGraph` validates a built graph and replaces its every
-  function by the declared cell its label names), `runDag` (linen's
-  `Graph.runM`, then each node's output, error or skipping) and `driverMain`
-  (the executable's stdin/stdout protocol). It imports linen ≥ 1.3.0 modules
+  every driver. `FunctionType` (which Lean types can be served and how to
+  call them on JSON), graphs over linen's `Control.Reactive` (`input`, in
+  `LunDriver.Dsl`, and each function as an operator: a `combineLatest` over
+  it, built in the scope `«#function».«name»` so its label names it), the
+  `lun_function` and `lun_graph` commands (the signature and graph checks, as
+  elaborators; `GraphImpl.ofGraph` validates a built graph and replaces its
+  every function by the declared one its label names), sessions
+  (`SessionState`: linen's `Session` clock and operator state plus every
+  node's outcome, as JSON; `GraphImpl.feed` restores it and pushes
+  occurrences; values travel wrapped — `okValue`/`failedValue`/`blockedValue`
+  — so a failure never ends a node's stream), `runGraph`/`sessionStart`/
+  `sessionUpdate`, and `driverMain` (the executable's stdin/stdout
+  protocol). It imports linen ≥ 1.3.0 modules
   (verified against 1.3.0 and 1.5.0), so it is **not** part of lun's own
   build: it is compiled only inside a driver. `test/e2e.sh` is what
   exercises it; `LunTests/Lun/DriverTest.lean` only checks it is embedded.
 - `Lun/Diagnostics.lean` — `lake build` output → diagnostics attributed to a
-  cell, DAG (with the line in the program), the project, the driver, or the
+  function, graph (with the line in the program), the project, the driver, or the
   build. Pure.
 - `Lun/Process.lean` — run a command with a deadline (process group killed),
   `hermeticGit` (host git config ignored).
@@ -48,8 +56,16 @@ Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
   pipeline (fetch → check, then under a lock generate → `lake build` →
   describe), the package-cache seeding, and `Builder.call` (running a ready
   driver).
+- `Lun/Session.lean` — sessions: stored under `{workdir}/sessions/` (atomic
+  writes), one lock per session, driven through `Builder.call`
+  (`session-start`/`session-update`).
 - `Lun/Server.lean` — the HTTP routes. `Main.lean` — environment.
-- `test/fixture/` — a user project for the end-to-end test (cells that pass,
+- `Examples/` — `pricing/` (a user project: an invoice's functions),
+  `Client.lean` (`lake exe lun-example`: build, register the invoice graph as
+  a session, update inputs, print what changed; `--dot` draws it) and
+  `run.sh` (a local lun running the client). `docs/invoice.svg` is its
+  `--dot` output, rendered by Graphviz, shown in the README.
+- `test/fixture/` — a user project for the end-to-end test (functions that pass,
   `Fixture/Rejected.lean` for ones that must not). `test/e2e.sh` — the
   end-to-end test.
 
@@ -62,6 +78,7 @@ test/e2e.sh ../linen      # needs jq, git, and a linen checkout >= 1.3.0
 
 `test/e2e.sh` picks a free port, runs lun with `LUN_ALLOW_LOCAL=1`, and
 takes a couple of minutes (it builds the fixture's driver ten times).
+`Examples/run.sh ../linen` runs the example (about 30 s with a built linen).
 
 ## Conventions
 
@@ -92,43 +109,49 @@ is always left to the user.
   interactive registry login). The Linux link of `lun` and of drivers is
   unverified; lun's own link and the drivers' were verified on macOS.
 - **Types are not a sandbox.** The checks bind the *declared* authority of a
-  cell (its effect row, handled by linen's handlers), but a project's code can
+  function (its effect row, handled by linen's handlers), but a project's code can
   still reach arbitrary `IO` through `unsafe` definitions, `@[implemented_by]`
-  or `@[extern]` deeper inside a function (only the cell function itself is
-  checked for `unsafe`), and its `lakefile.lean` runs arbitrary code at build
+  or `@[extern]` deeper inside a function (only the declared function itself
+  is checked for `unsafe`), and its `lakefile.lean` runs arbitrary code at build
   time. The container is the isolation boundary; run lun with no credentials
   of its own and no network access beyond what builds need.
-- **The DAG check is a walk, a denylist and a graph check, not a proof.** The
+- **The graph check is a walk, a denylist and a graph check, not a proof.** The
   walk refuses the builder's primitives (`Reactive.register`, `addNode`,
   `fnImpl`, `fn`, `Builder.mk`, `Graph.mk`, `Graph.rebind`, `Operator.*`)
-  anywhere in the DAG's non-library code; library functions are trusted, not
-  walked. What makes it safe is the graph check (`Dag.ofGraph`): only inputs
-  and `combineLatest`s over functions labelled as declared cells, with their
-  arities, and every function replaced by that cell before anything runs.
+  anywhere in the graph's non-library code; library functions are trusted, not
+  walked. What makes it safe is the graph check (`GraphImpl.ofGraph`): only inputs
+  and `combineLatest`s over functions labelled as declared functions, with their
+  arities, and every function replaced by that function before anything runs.
   Known consequences, neither of which breaks safety (every value is decoded
-  by the declared cell it reaches): a function registered by a library
-  operator inside `scope «#cell».«name»` is accepted and runs as that cell
+  by the declared function it reaches): a function registered by a library
+  operator inside `scope «#function».«name»` is accepted and runs as that function
   (so its observable's type may be the wrong one); an observable taken out of
   a *separate* `Reactive.build` names a node index of another graph, which
   linen's build accepts if that index is earlier.
-- **DAGs are cell applications only.** linen's other operators (`map`,
+- **Graphs are function applications only.** linen's other operators (`map`,
   `filter`, `scan`, the timed ones, …) and `Operator`s are refused: they would
-  run Lean code that is not a declared cell (`mapM` even `IO`), and a DAG
+  run Lean code that is not a declared function (`mapM` even `IO`), and a graph
   request is one instant (every input fed once at time 0), not a stream.
 - **An `input` cannot be relabelled** (`node x ← input "x" Nat` fails: the
-  input's label is its name). `node` works on cell applications.
-- **`HTTP` and `FileSystem` cells act from lun's container directly**, not
+  input's label is its name). `node` works on function applications.
+- **`HTTP` and `FileSystem` functions act from lun's container directly**, not
   through liaison: no credentials, no metering, no audit row. Their capability
   (in the signature) bounds what they may reach.
-- **Cells run in-process per call**: each call spawns the driver (no
-  long-running per-cell service, no pooling). DAGs evaluate sequentially.
+- **Functions run in-process per call**: each call spawns the driver (no
+  long-running per-function service, no pooling). Graphs evaluate
+  sequentially.
+- **A session update with several inputs** feeds them in order at one instant
+  of linen's clock: a function reading two of them may run for the
+  intermediate state too (only the final outcomes are reported).
+- **Sessions are never collected**: they stay until `DELETE`d; a stored
+  session whose build is gone fails its next update.
 - **One compilation at a time** (fetches run concurrently). A queued build's
   warrant is used as soon as the build starts fetching, not after the queue.
 - **Private repositories**: github.com and gitlab.com only (the connections'
   `base_url`s); archives are held in memory; submodules are not fetched on
   either path. GitLab's archive, GitHub's compare and GitLab's merge-base go
   through liaison; GitHub's signed tarball URL is fetched directly.
-- **Only `Trace`, `Error`, `HTTP`, `FileSystem`** effects are allowed in a cell
+- **Only `Trace`, `Error`, `HTTP`, `FileSystem`** effects are allowed in a function
   (those with a configuration-free `Handler _ IO` in linen). `Reader`, `State`,
   `PostgreSQL`, … would need configuration lun does not have.
 - **A project linked to a linen revision the package cache lacks** builds its

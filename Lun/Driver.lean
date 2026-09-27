@@ -6,19 +6,19 @@
     lakefile.toml            requires the user project by path
     lean-toolchain           the user project's
     LunDriver/Runtime.lean  template/LunDriver/Runtime.lean, verbatim
-    LunDriver/Cells/C<i>.lean   one module per cell: `lun_cell …`
-    LunDriver/Cells.lean        the cells, as a list
-    LunDriver/Dags/D<j>.lean    one module per DAG: `lun_dag …`
+    LunDriver/Functions/F<i>.lean  one module per function: `lun_function …`
+    LunDriver/Functions.lean       the functions, as a list
+    LunDriver/Graphs/G<j>.lean     one module per graph: `lun_graph …`
     LunDriver/Main.lean         the `lun-driver` executable
   ```
 
-  One module per cell and per DAG is what lets lun attribute every error to
-  the cell or DAG it belongs to (`Lun.Diagnostics`), and lets Lake check the
-  cells independently.
+  One module per function and per graph is what lets lun attribute every error to
+  the function or graph it belongs to (`Lun.Diagnostics`), and lets Lake check the
+  functions independently.
 
   Generation is pure. Nothing from a request is spliced into a generated file
   as code: names are validated identifiers (and written `«quoted»`), and
-  signatures and DAG programs are embedded as raw string literals, which the
+  signatures and graph programs are embedded as raw string literals, which the
   runtime parses as exactly one term each.
 -/
 import Lun.Spec
@@ -69,11 +69,11 @@ def strLit (s : String) : String := s.quote
 
 -- ── Modules ─────────────────────────────────────────────────────────────────
 
-/-- The module checking cell `i`. -/
-def cellModule (i : Nat) : String := s!"LunDriver.Cells.C{i}"
+/-- The module checking function `i`. -/
+def functionModule (i : Nat) : String := s!"LunDriver.Functions.F{i}"
 
-/-- The module checking DAG `j`. -/
-def dagModule (j : Nat) : String := s!"LunDriver.Dags.D{j}"
+/-- The module checking graph `j`. -/
+def graphModule (j : Nat) : String := s!"LunDriver.Graphs.G{j}"
 
 /-- A module's file, relative to the driver. -/
 def moduleFile (m : String) : String := "/".intercalate (m.splitOn ".") ++ ".lean"
@@ -81,38 +81,38 @@ def moduleFile (m : String) : String := "/".intercalate (m.splitOn ".") ++ ".lea
 private def opensLine (opens : List String) : String :=
   if opens.isEmpty then "" else s!"open {" ".intercalate (opens.map ident)}\n"
 
-/-- The module for cell `c`. -/
-def cellSource (opens : List String) (c : CellSpec) : String :=
+/-- The module for function `c`. -/
+def functionSource (opens : List String) (c : FunctionSpec) : String :=
   s!"import LunDriver.Runtime\nimport {ident c.module}\n" ++
   "open Control.Monad.Effect\n" ++ opensLine opens ++
-  s!"lun_cell {strLit c.name} := {ident c.function} : {rawString c.signature}\n"
+  s!"lun_function {strLit c.name} := {ident c.function} : {rawString c.signature}\n"
 
-/-- The line of a DAG module on which its program starts (1-based), and the
+/-- The line of a graph module on which its program starts (1-based), and the
     column its first line starts at. -/
-def dagProgramStart (opens : List String) (d : DagSpec) : Nat × Nat :=
+def graphProgramStart (opens : List String) (d : GraphSpec) : Nat × Nat :=
   (if opens.isEmpty then 3 else 4,
-   s!"lun_dag {strLit d.name} := ".length + rawStringPrefixLength d.program)
+   s!"lun_graph {strLit d.name} := ".length + rawStringPrefixLength d.program)
 
-/-- The module for DAG `d`. -/
-def dagSource (opens : List String) (d : DagSpec) : String :=
-  "import LunDriver.Cells\n" ++
-  "open Control.Reactive LunDriver.Dsl LunDriver.Cells\n" ++ opensLine opens ++
-  s!"lun_dag {strLit d.name} := {rawString d.program}\n"
+/-- The module for graph `d`. -/
+def graphSource (opens : List String) (d : GraphSpec) : String :=
+  "import LunDriver.Functions\n" ++
+  "open Control.Reactive LunDriver.Dsl LunDriver.Functions\n" ++ opensLine opens ++
+  s!"lun_graph {strLit d.name} := {rawString d.program}\n"
 
-/-- The list of all cells, which the DAG checks and the executable use. -/
-def cellsSource (spec : BuildSpec) : String :=
-  let imports := (List.range spec.cells.length).map fun i => s!"import {cellModule i}\n"
-  let impls := spec.cells.map fun c => s!"LunDriver.Impl.{ident c.name}"
+/-- The list of all functions, which the graph checks and the executable use. -/
+def functionsSource (spec : BuildSpec) : String :=
+  let imports := (List.range spec.functions.length).map fun i => s!"import {functionModule i}\n"
+  let impls := spec.functions.map fun c => s!"LunDriver.Impl.{ident c.name}"
   String.join imports ++
-  s!"\ndef LunDriver.cellImpls : List LunDriver.CellImpl :=\n  [{", ".intercalate impls}]\n"
+  s!"\ndef LunDriver.functionImpls : List LunDriver.FunctionImpl :=\n  [{", ".intercalate impls}]\n"
 
 /-- The executable. -/
 def mainSource (spec : BuildSpec) : String :=
-  let imports := (List.range spec.dags.length).map fun j => s!"import {dagModule j}\n"
-  let dags := spec.dags.map fun d => s!"({strLit d.name}, LunDriver.Graphs.{ident d.name})"
-  "import LunDriver.Cells\n" ++ String.join imports ++
+  let imports := (List.range spec.graphs.length).map fun j => s!"import {graphModule j}\n"
+  let graphs := spec.graphs.map fun d => s!"({strLit d.name}, LunDriver.Graphs.{ident d.name})"
+  "import LunDriver.Functions\n" ++ String.join imports ++
   s!"\ndef main (args : List String) : IO UInt32 :=\n" ++
-  s!"  LunDriver.driverMain LunDriver.cellImpls [{", ".intercalate dags}] args\n"
+  s!"  LunDriver.driverMain LunDriver.functionImpls [{", ".intercalate graphs}] args\n"
 
 /-- The driver's `lakefile.toml`. -/
 def lakefileSource (d : Input) : String :=
@@ -128,13 +128,13 @@ def files (d : Input) : List (String × String) :=
   [ ("lakefile.toml", lakefileSource d)
   , ("lean-toolchain", d.toolchain)
   , ("LunDriver/Runtime.lean", runtimeSource)
-  , ("LunDriver/Cells.lean", cellsSource spec)
+  , ("LunDriver/Functions.lean", functionsSource spec)
   , ("LunDriver/Main.lean", mainSource spec) ] ++
-  spec.cells.zipIdx.map (fun (c, i) => (moduleFile (cellModule i), cellSource spec.opens c)) ++
-  spec.dags.zipIdx.map (fun (dg, j) => (moduleFile (dagModule j), dagSource spec.opens dg))
+  spec.functions.zipIdx.map (fun (c, i) => (moduleFile (functionModule i), functionSource spec.opens c)) ++
+  spec.graphs.zipIdx.map (fun (dg, j) => (moduleFile (graphModule j), graphSource spec.opens dg))
 
-/-- The build targets that check the cells (and build the project). -/
-def cellTargets (spec : BuildSpec) : List String :=
-  (List.range spec.cells.length).map cellModule
+/-- The build targets that check the functions (and build the project). -/
+def functionTargets (spec : BuildSpec) : List String :=
+  (List.range spec.functions.length).map functionModule
 
 end Lun.Driver

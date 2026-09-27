@@ -34,40 +34,40 @@ def spec : BuildSpec :=
   { source := { repo := { host := .github, segments := ["o", "r"], cloneUrl := "https://github.com/o/r.git" }
                 branch := "main", commit := "".pushn 'a' 40, path := "", credentials := none }
     opens := []
-    cells := [ { name := "math.double", module := "P.Math", function := "P.double", signature := "Nat → Eff [] Nat" }
+    functions := [ { name := "math.double", module := "P.Math", function := "P.double", signature := "Nat → Eff [] Nat" }
              , { name := "add", module := "P.Math", function := "P.add", signature := "Nat → Nat → Eff [] Nat" } ]
-    dags := [ { name := "main", program := "do\n  let x ← input \"x\" Nat\n  math.double x" } ] }
+    graphs := [ { name := "main", program := "do\n  let x ← input \"x\" Nat\n  math.double x" } ] }
 
 def input : Input := { spec, projectDir := "/work/src", packageName := "proj", toolchain := "leanprover/lean4:v4.34.0\n" }
 
 #guard (files input).map (·.1) ==
-  [ "lakefile.toml", "lean-toolchain", "LunDriver/Runtime.lean", "LunDriver/Cells.lean"
-  , "LunDriver/Main.lean", "LunDriver/Cells/C0.lean", "LunDriver/Cells/C1.lean", "LunDriver/Dags/D0.lean" ]
+  [ "lakefile.toml", "lean-toolchain", "LunDriver/Runtime.lean", "LunDriver/Functions.lean"
+  , "LunDriver/Main.lean", "LunDriver/Functions/F0.lean", "LunDriver/Functions/F1.lean", "LunDriver/Graphs/G0.lean" ]
 
-#guard cellSource [] spec.cells[0]! ==
+#guard functionSource [] spec.functions[0]! ==
   "import LunDriver.Runtime\nimport «P».«Math»\nopen Control.Monad.Effect\n" ++
-  "lun_cell \"math.double\" := «P».«double» : r#\"Nat → Eff [] Nat\"#\n"
+  "lun_function \"math.double\" := «P».«double» : r#\"Nat → Eff [] Nat\"#\n"
 
-#guard has (cellSource ["P", "Q.R"] spec.cells[0]!) "\nopen «P» «Q».«R»\n"
+#guard has (functionSource ["P", "Q.R"] spec.functions[0]!) "\nopen «P» «Q».«R»\n"
 
-#guard dagSource [] spec.dags[0]! ==
-  "import LunDriver.Cells\nopen Control.Reactive LunDriver.Dsl LunDriver.Cells\n" ++
-  "lun_dag \"main\" := r#\"do\n  let x ← input \"x\" Nat\n  math.double x\"#\n"
+#guard graphSource [] spec.graphs[0]! ==
+  "import LunDriver.Functions\nopen Control.Reactive LunDriver.Dsl LunDriver.Functions\n" ++
+  "lun_graph \"main\" := r#\"do\n  let x ← input \"x\" Nat\n  math.double x\"#\n"
 
--- The program starts on line 3, after `lun_dag "main" := r#"` (21 characters).
-#guard dagProgramStart [] spec.dags[0]! == (3, 21)
-#guard dagProgramStart ["P"] spec.dags[0]! == (4, 21)
-#guard (((dagSource [] spec.dags[0]!).splitOn "\n")[2]!.drop 21).toString == "do"
+-- The program starts on line 3, after `lun_graph "main" := r#"` (23 characters).
+#guard graphProgramStart [] spec.graphs[0]! == (3, 23)
+#guard graphProgramStart ["P"] spec.graphs[0]! == (4, 23)
+#guard (((graphSource [] spec.graphs[0]!).splitOn "\n")[2]!.drop 23).toString == "do"
 
 #guard has (lakefileSource input) "path = \"/work/src\""
 #guard has (lakefileSource input) "name = \"proj\""
 #guard has (mainSource spec) "[(\"main\", LunDriver.Graphs.«main»)]"
-#guard has (cellsSource spec) "[LunDriver.Impl.«math».«double», LunDriver.Impl.«add»]"
-#guard cellTargets spec == ["LunDriver.Cells.C0", "LunDriver.Cells.C1"]
-#guard moduleFile "LunDriver.Dags.D3" == "LunDriver/Dags/D3.lean"
+#guard has (functionsSource spec) "[LunDriver.Impl.«math».«double», LunDriver.Impl.«add»]"
+#guard functionTargets spec == ["LunDriver.Functions.F0", "LunDriver.Functions.F1"]
+#guard moduleFile "LunDriver.Graphs.G3" == "LunDriver/Graphs/G3.lean"
 
 -- The runtime is embedded.
-#guard has runtimeSource "elab \"lun_cell \""
-#guard has runtimeSource "elab \"lun_dag \""
+#guard has runtimeSource "elab \"lun_function \""
+#guard has runtimeSource "elab \"lun_graph \""
 
 end LunTests.Driver

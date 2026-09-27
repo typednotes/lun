@@ -6,4 +6,5 @@ import LunTests.Lun.DiagnosticsTest
 import LunTests.Lun.FetchTest
 import LunTests.Lun.ProcessTest
 import LunTests.Lun.BuildTest
+import LunTests.Lun.SessionTest
 import LunTests.Lun.ServerTest
