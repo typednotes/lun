@@ -150,9 +150,12 @@ expect_failed "sorry is refused" \
 expect_failed "an ill-typed DAG is attributed to its line in the program" \
   "$(request "$commit" main "$cells" '[{"name": "bad", "program": "do\n  let p ← input \"p\" Fixture.Point\n  math.double p"}]')" \
   '.state == "failed" and (.diagnostics[0] | .scope == "dag" and .name == "bad" and .line == 3)'
-expect_failed "a DAG may not forge a cell" \
-  "$(request "$commit" main "$cells" '[{"name": "forge", "program": "do\n  let x ← input \"x\" Nat\n  (⟨\"math.double\"⟩ : Control.Reactive.Cell [Nat] Nat) x"}]')" \
-  '.state == "failed" and (.diagnostics[0].message | test("Cell.mk"))'
+expect_failed "a DAG may not forge a node" \
+  "$(request "$commit" main "$cells" '[{"name": "forge", "program": "do\n  let x ← input \"x\" Nat\n  Control.Reactive.Reactive.addNode (.combineLatest ⟨0⟩) [x.id] Nat"}]')" \
+  '.state == "failed" and (.diagnostics[0].message | test("addNode"))'
+expect_failed "a DAG may apply only the declared cells" \
+  "$(request "$commit" main "$cells" '[{"name": "lambda", "program": "do\n  let x ← input \"x\" Nat\n  combineLatest (fun (a : Nat) => a + 1) x"}]')" \
+  '.state == "failed" and (.diagnostics[0] | .scope == "dag" and .name == "lambda" and (.message | test("not a declared cell")))'
 expect_failed "a DAG program is exactly one term" \
   "$(request "$commit" main "$cells" '[{"name": "inject", "program": "pure ())\n#eval IO.println \"hi\"\n(pure ()"}]')" \
   '.state == "failed" and (.diagnostics[0].message | test("cannot parse"))'

@@ -51,7 +51,7 @@ def input : Input := { spec, projectDir := "/work/src", packageName := "proj", t
 #guard has (cellSource ["P", "Q.R"] spec.cells[0]!) "\nopen «P» «Q».«R»\n"
 
 #guard dagSource [] spec.dags[0]! ==
-  "import LunDriver.Cells\nopen Control.Reactive LunDriver.Cells\n" ++
+  "import LunDriver.Cells\nopen Control.Reactive LunDriver.Dsl LunDriver.Cells\n" ++
   "lun_dag \"main\" := r#\"do\n  let x ← input \"x\" Nat\n  math.double x\"#\n"
 
 -- The program starts on line 3, after `lun_dag "main" := r#"` (21 characters).

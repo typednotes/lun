@@ -96,7 +96,7 @@ def dagProgramStart (opens : List String) (d : DagSpec) : Nat × Nat :=
 /-- The module for DAG `d`. -/
 def dagSource (opens : List String) (d : DagSpec) : String :=
   "import LunDriver.Cells\n" ++
-  "open Control.Reactive LunDriver.Cells\n" ++ opensLine opens ++
+  "open Control.Reactive LunDriver.Dsl LunDriver.Cells\n" ++ opensLine opens ++
   s!"lun_dag {strLit d.name} := {rawString d.program}\n"
 
 /-- The list of all cells, which the DAG checks and the executable use. -/
@@ -104,9 +104,7 @@ def cellsSource (spec : BuildSpec) : String :=
   let imports := (List.range spec.cells.length).map fun i => s!"import {cellModule i}\n"
   let impls := spec.cells.map fun c => s!"LunDriver.Impl.{ident c.name}"
   String.join imports ++
-  s!"\ndef LunDriver.cellImpls : List LunDriver.CellImpl :=\n  [{", ".intercalate impls}]\n" ++
-  "\ndef LunDriver.cellArities : List (String × Nat) :=\n" ++
-  "  LunDriver.cellImpls.map fun c => (c.name, c.arity)\n"
+  s!"\ndef LunDriver.cellImpls : List LunDriver.CellImpl :=\n  [{", ".intercalate impls}]\n"
 
 /-- The executable. -/
 def mainSource (spec : BuildSpec) : String :=

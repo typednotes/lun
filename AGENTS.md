@@ -5,9 +5,10 @@ services: one per cell (a function under a declared signature) and one per DAG
 of cells (a program in linen's `Reactive` monad). See `README.md` for the API.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
-Built on `linen` (pinned `v1.2.0` for lun itself; user projects need
-linen ≥ `1.3.0`, see below). Speaks to `liaison` with liaison's own wire
-module, `Liaison.Wire` (pinned `v0.5.0`).
+Built on `linen` (pinned `v1.5.0` for lun itself; user projects need
+linen ≥ `1.3.0`, the first with the `Control.Reactive` the runtime uses).
+Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
+`v0.5.0`).
 
 ## Layout
 
@@ -25,10 +26,16 @@ module, `Liaison.Wire` (pinned `v0.5.0`).
   `include_str`. Pure.
 - `template/LunDriver/Runtime.lean` — **the driver runtime**, copied into
   every driver. `CellFn` (which function types are cells and how to call them
-  on JSON), the `lun_cell` and `lun_dag` commands (the signature and DAG
-  checks, as elaborators), and `driverMain` (the executable's stdin/stdout
-  protocol). It imports linen ≥ 1.3.0 modules, so it is **not** part of lun's
-  own build: it is compiled only inside a driver. `test/e2e.sh` is what
+  on JSON), DAGs over linen's `Control.Reactive` (`input`, in
+  `LunDriver.Dsl`, and each cell as an operator: a `combineLatest` over the
+  cell, built in the scope `«#cell».«name»` so its function's label names the
+  cell), the `lun_cell` and `lun_dag` commands (the signature and DAG checks,
+  as elaborators; `Dag.ofGraph` validates a built graph and replaces its every
+  function by the declared cell its label names), `runDag` (linen's
+  `Graph.runM`, then each node's output, error or skipping) and `driverMain`
+  (the executable's stdin/stdout protocol). It imports linen ≥ 1.3.0 modules
+  (verified against 1.3.0 and 1.5.0), so it is **not** part of lun's own
+  build: it is compiled only inside a driver. `test/e2e.sh` is what
   exercises it; `LunTests/Lun/DriverTest.lean` only checks it is embedded.
 - `Lun/Diagnostics.lean` — `lake build` output → diagnostics attributed to a
   cell, DAG (with the line in the program), the project, the driver, or the
@@ -81,15 +88,6 @@ is always left to the user.
 
 ## Known gaps (named, not silent)
 
-- **liaison v0.5.0 is tagged locally, not pushed yet.** Until it is on
-  GitHub, a fresh `lake build` (CI, the image) cannot fetch it; a checkout
-  with `.lake/packages/liaison` at that tag builds.
-- **linen 1.3.0 is not released yet.** lun's runtime needs
-  `Control.Reactive` and `Control.Monad.Effect.Handler`, added to linen in its
-  working tree as 1.3.0 but not tagged. Until it is: the `Dockerfile`'s
-  default `LINEN_REF=v1.3.0` does not exist (the image build fails at the
-  cache stage), and the CI `e2e` job needs linen's `main` to contain it. The
-  end-to-end test passes locally against the linen working tree.
 - **The container image has not been built here** (the local podman needed an
   interactive registry login). The Linux link of `lun` and of drivers is
   unverified; lun's own link and the drivers' were verified on macOS.
@@ -100,16 +98,25 @@ is always left to the user.
   checked for `unsafe`), and its `lakefile.lean` runs arbitrary code at build
   time. The container is the isolation boundary; run lun with no credentials
   of its own and no network access beyond what builds need.
-- **The DAG check is a walk plus a denylist, not a proof.** It refuses
-  `Cell.mk`, `Signal.mk`, `Graph.mk`, `Node.*` and `Reactive`'s internals
-  anywhere in the DAG's non-library code (tested: structure instances, `with`
-  updates, anonymous constructors, a raw `StateM Graph`), but library
-  functions are trusted, not walked. Known consequence: a `Signal` taken out of
-  a *separate* `Reactive.build` (`(input "y" Nat).build.1`) is accepted, naming
-  a node index of another graph. It cannot break typing or safety — every
-  applied cell is a declared, checked one, the graph is re-validated (well
-  formed, declared cells, arities, distinct inputs) and every value is decoded
-  by the cell it reaches — but the edge may point at an unintended node.
+- **The DAG check is a walk, a denylist and a graph check, not a proof.** The
+  walk refuses the builder's primitives (`Reactive.register`, `addNode`,
+  `fnImpl`, `fn`, `Builder.mk`, `Graph.mk`, `Graph.rebind`, `Operator.*`)
+  anywhere in the DAG's non-library code; library functions are trusted, not
+  walked. What makes it safe is the graph check (`Dag.ofGraph`): only inputs
+  and `combineLatest`s over functions labelled as declared cells, with their
+  arities, and every function replaced by that cell before anything runs.
+  Known consequences, neither of which breaks safety (every value is decoded
+  by the declared cell it reaches): a function registered by a library
+  operator inside `scope «#cell».«name»` is accepted and runs as that cell
+  (so its observable's type may be the wrong one); an observable taken out of
+  a *separate* `Reactive.build` names a node index of another graph, which
+  linen's build accepts if that index is earlier.
+- **DAGs are cell applications only.** linen's other operators (`map`,
+  `filter`, `scan`, the timed ones, …) and `Operator`s are refused: they would
+  run Lean code that is not a declared cell (`mapM` even `IO`), and a DAG
+  request is one instant (every input fed once at time 0), not a stream.
+- **An `input` cannot be relabelled** (`node x ← input "x" Nat` fails: the
+  input's label is its name). `node` works on cell applications.
 - **`HTTP` and `FileSystem` cells act from lun's container directly**, not
   through liaison: no credentials, no metering, no audit row. Their capability
   (in the signature) bounds what they may reach.

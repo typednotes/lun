@@ -6,7 +6,7 @@ open System Lake DSL
 -- `liaison` it needs no extra link arguments: Lean's toolchain links OpenSSL
 -- statically into every executable already.
 
-require linen from git "https://github.com/typednotes/linen" @ "v1.2.0"
+require linen from git "https://github.com/typednotes/linen" @ "v1.5.0"
 
 -- For `Liaison.Wire` only: liaison's wire format (`POST /v0/egress`), the
 -- module liaison's own server parses with. It is pure and imports none of

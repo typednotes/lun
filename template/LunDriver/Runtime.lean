@@ -17,11 +17,15 @@
     `FileSystem` — handled by linen's own `Handler _ IO` instances (a project's
     own instance for one of them is refused), and free of `sorry`; then the
     cell's implementation and typed reference.
-  - `lun_dag "name" := r#"program"#` — the DAG check: the DAG's definition may
-    construct cells, nodes and graphs only through the checked cells, `input`
-    and cell application (it is walked through every non-library constant it
-    uses), is free of `sorry`, and the graph it builds is well formed, applies
-    only declared cells with their arity, and names each input once.
+  - `lun_dag "name" := r#"program"#` — a DAG: a program in linen's
+    `Reactive IO Json` monad (`Control.Reactive`) over `input`s and the cells,
+    each cell applying like a function of observables (a `combineLatest` over
+    the cell). The check: the program is free of `sorry` and of the builder's
+    primitives (it is walked through every non-library constant it uses), and
+    the graph it builds consists of inputs and applications of declared cells
+    with their arity, nothing else (`Dag.ofGraph`). Every function of the
+    graph is then replaced by the declared cell its label names, so what runs
+    is only ever a declared, checked cell.
   - Request text (signatures, DAG programs) is embedded as raw string literals
     and parsed as exactly one term each (`parseEmbeddedTerm`), so it can never
     add commands to a generated module; messages still point into it.
@@ -95,8 +99,12 @@ structure CellImpl where
 def CellImpl.ofFn {σ : Type 1} [CellFn σ] (name signature : String) (f : σ) : CellImpl :=
   { name, signature, arity := CellFn.arity σ, call := CellFn.call f }
 
-/-- The typed reference a DAG applies. -/
-abbrev CellRef (σ : Type 1) [CellFn σ] : Type := Cell (CellFn.Args σ) (CellFn.Out σ)
+/-- The cell as a function linen's reactive graphs can call: its arguments
+    are the node's sources, in order (a cell of no inputs reads one start
+    source, whose value it ignores). A failure is the node's `error`. -/
+def CellImpl.impl (c : CellImpl) : Impl IO Json := fun vs => do
+  try pure (.ok (some (← c.call (if c.arity == 0 then [] else vs))))
+  catch e => pure (.error (toString e))
 
 -- ── The signature check ─────────────────────────────────────────────────────
 
@@ -183,6 +191,61 @@ def checkCell (fn : Ident) (sig : Term) : TermElabM Unit := do
   if (← collectAxioms const).contains ``sorryAx then
     throwError "`{const}` depends on `sorry`"
 
+-- ── DAGs: inputs and cells as operators ─────────────────────────────────────
+
+/-- The monad a DAG is written in: linen's reactive graphs, over JSON values,
+    running cells in `IO`. -/
+abbrev DagM : Type → Type := Reactive IO Json
+
+/-- The first component of every input's label. Not a valid identifier, so
+    no cell or input name can be mistaken for it. -/
+def inputMarker : String := "#input"
+
+/-- The first component of the scope every cell application is built in. -/
+def cellMarker : String := "#cell"
+
+/-- The label of input `name`: `«#input».«name»` (after any enclosing
+    `scope`). -/
+def inputLabel (name : String) : Name := .str (.str .anonymous inputMarker) name
+
+/-- The scope an application of cell `name` is built in. -/
+def cellScope (name : String) : Name := .str (.str .anonymous cellMarker) name
+
+/-- The input a subject's label names, if it is an input's. -/
+def inputOfLabel : Name → Option String
+  | .str (.str _ m) n => if m == inputMarker then some n else none
+  | _ => none
+
+/-- The cell a generated label belongs to, if it was generated inside a cell
+    application: `…«#cell».«name».kind.k`, `kind` being `fn` for the cell's
+    function and `subject` for the start source of a cell of no inputs. -/
+def cellOfLabel (kind : String) : Name → Option String
+  | .num (.str (.str (.str _ m) c) k) _ => if m == cellMarker && k == kind then some c else none
+  | _ => none
+
+/-- A new input: a subject named `name`, fed by the DAG request's
+    `inputs.name`. (In `LunDriver.Dsl`, which DAG modules open.) -/
+def Dsl.input (name : String) (α : Type) : DagM (Observable α) :=
+  Subject.toObservable <$> Reactive.label (inputLabel name) (subject α)
+
+/-- Apply cell `c` to the nodes `ids`: a `combineLatest` over the cell's
+    function, labelled after the cell. A cell of no inputs gets a start
+    source of its own instead, which the run feeds once. -/
+def applyCell (c : CellImpl) (β : Type) (ids : List NodeId) : DagM (Observable β) :=
+  Reactive.scope (cellScope c.name) do
+    let ids ← if c.arity == 0 then (fun s => [s.toObservable.id]) <$> subject Unit else pure ids
+    let f ← Reactive.register c.impl
+    Reactive.addNode (.combineLatest f) ids β
+
+/-- The operator a DAG applies for a cell of signature `σ`: one observable
+    per input, then the cell's output (`Observable α₁ → … → DagM (Observable β)`,
+    or `DagM (Observable β)` for a cell of no inputs). -/
+abbrev CellRef (σ : Type 1) [CellFn σ] : Type := Combine IO Json (CellFn.Args σ) (CellFn.Out σ)
+
+/-- The operator of the cell `c`, of signature `σ`. -/
+def cellRef {σ : Type 1} [CellFn σ] (c : CellImpl) : CellRef σ :=
+  Combine.collect (applyCell c (CellFn.Out σ)) [] (CellFn.Args σ)
+
 -- ── Embedded source text ────────────────────────────────────────────────────
 
 /-- Relocate syntax parsed from a string to where that string's content starts
@@ -218,7 +281,8 @@ def dottedName (s : String) : Name :=
 
 /-- `lun_cell "name" := f : r"σ"` — check that `f` is a cell of signature `σ`
     (see the module documentation), then define its implementation
-    `LunDriver.Impl.name` and its typed reference `LunDriver.Cells.name`. -/
+    `LunDriver.Impl.name` and the operator DAGs apply, `LunDriver.Cells.name`
+    (`cellRef`). -/
 elab "lun_cell " name:str " := " fn:ident " : " sig:str : command => do
   let sigStx ← parseEmbeddedTerm sig
   liftTermElabM (checkCell fn sigStx)
@@ -230,47 +294,105 @@ elab "lun_cell " name:str " := " fn:ident " : " sig:str : command => do
   elabCommand (← `(abbrev $sigId : Type 1 := $sigStx))
   elabCommand (← `(def $implId : LunDriver.CellImpl :=
     LunDriver.CellImpl.ofFn $name $sigText ($fn : $sigId)))
-  elabCommand (← `(def $cellId : LunDriver.CellRef $sigId := ⟨$name⟩))
+  elabCommand (← `(def $cellId : LunDriver.CellRef $sigId := LunDriver.cellRef $implId))
 
 -- ── The DAG check ───────────────────────────────────────────────────────────
 
-/-- Constructors a DAG may only reach through `input`, cell application and
-    the checked cells. -/
+/-- What a node of a DAG is. -/
+inductive NodeKind where
+  /-- An input, by name. -/
+  | input (name : String)
+  /-- The start source of the cell of no inputs that reads it (not shown). -/
+  | start
+  /-- An application of a declared cell to the nodes `args` (graph indices). -/
+  | cell (name : String) (args : List Nat)
+  deriving Inhabited, BEq, Repr
+
+/-- A checked DAG, ready to run: its graph, whose every function is a
+    declared cell's, and what each node is. -/
+structure Dag where
+  graph : Graph IO Json
+  kinds : Array NodeKind
+
+/-- The builder's primitives, which a DAG may reach only through `input` and
+    the cells. (`Reactive.fnImpl` is linen ≥ 1.4.0, so it is named, not
+    resolved: the runtime still compiles against linen 1.3.0.) -/
 def bannedInDag : List Name :=
-  [ ``Cell.mk, ``Graph.mk, ``Node.input, ``Node.apply, ``Reactive.applyNode, ``Cell.applyAux
-  , ``Signal.mk ]
+  [ ``Reactive.register, ``Reactive.addNode, `Control.Reactive.Reactive.fnImpl, ``Reactive.fn
+  , ``Builder.mk, ``Graph.mk, ``Graph.rebind, ``Operator.mk, ``Operator.splice ]
 
 /-- Library modules, whose constants are trusted and not walked. -/
 def trustedModule (m : Name) : Bool :=
   [`Init, `Std, `Lean, `Linen].contains m.getRoot || m == `LunDriver.Runtime
 
-/-- What is wrong with a graph as a DAG of the declared cells, if anything:
-    it must be well formed, apply only declared cells with their arity, and
-    name each input once. `cells` maps each declared cell to its arity. -/
-def validateGraph (cells : List (String × Nat)) (g : Graph) : Except String Unit := do
-  unless decide g.WellFormed do throw "the graph reads a node before it is defined"
-  let mut seen : List String := []
+/-- `g` as a DAG of the declared `cells`, or what is wrong with it: every node
+    is an input or an application of a declared cell (by its function's label)
+    to as many nodes as the cell has inputs, and every function is a declared
+    cell's — which then replaces it, whatever the graph held. Input names are
+    distinct because labels are. -/
+def Dag.ofGraph (cells : List CellImpl) (g : Graph IO Json) : Except String Dag := do
+  let cellOf (name : String) : Option CellImpl := cells.find? (·.name == name)
+  let fnCells ← g.fnLabels.toList.mapM fun l => match cellOfLabel "fn" l >>= cellOf with
+    | some c => pure c
+    | none => throw s!"the function `{l}` is not a declared cell; a DAG may apply only the \
+        declared cells"
+  let describe (i : Nat) : String := s!"node {i} (`{g.label ⟨i⟩}`)"
+  let mut kinds : Array NodeKind := #[]
+  let mut startsRead : List Nat := []
   for h : i in [0:g.nodes.size] do
-    match g.nodes[i] with
-    | .input name =>
-      if seen.contains name then throw s!"the input '{name}' is declared twice"
-      seen := name :: seen
-    | .apply cell args =>
-      match cells.lookup cell with
-      | none => throw s!"node {i} applies '{cell}', which is not a declared cell"
-      | some n =>
-        unless args.length == n do
-          throw s!"node {i} applies '{cell}' to {args.length} arguments; it takes {n}"
+    let n := g.nodes[i]
+    match n.op with
+    | .subject =>
+      if let some name := inputOfLabel (g.label ⟨i⟩) then kinds := kinds.push (.input name)
+      else if (cellOfLabel "subject" (g.label ⟨i⟩)).isSome then kinds := kinds.push .start
+      else throw s!"{describe i} is a subject that is not an `input`"
+    | .combineLatest f =>
+      let some c := fnCells[f.idx]? | throw s!"{describe i} applies an unknown function"
+      let args := n.args.map (·.idx)
+      let isStart (j : Nat) : Bool := kinds[j]? == some .start
+      if c.arity == 0 then
+        match args with
+        | [j] =>
+          unless isStart j && !startsRead.contains j do
+            throw s!"{describe i} applies '{c.name}', which takes no input, to a node"
+          startsRead := j :: startsRead
+          kinds := kinds.push (.cell c.name [])
+        | _ => throw s!"{describe i} applies '{c.name}', which takes no input, to {args.length} nodes"
+      else
+        unless args.length == c.arity do
+          throw s!"{describe i} applies '{c.name}' to {args.length} arguments; it takes {c.arity}"
+        if args.any isStart then throw s!"{describe i} applies '{c.name}' to a start source"
+        kinds := kinds.push (.cell c.name args)
+    | op => throw s!"{describe i} uses the `{op.name}` operator; a DAG may only apply the \
+        declared cells to inputs and to each other"
+  for h : i in [0:kinds.size] do
+    if kinds[i] == .start && !startsRead.contains i then throw s!"{describe i} is not read"
+  let fns : Array (Impl IO Json) := Array.ofFn (n := g.fns.size) fun k =>
+    ((fnCells[k.val]?).map CellImpl.impl).getD fun _ => pure (.error "unknown function")
+  let graph : Graph IO Json :=
+    ⟨g.nodes, fns, g.labels, g.fnLabels,
+      by rw [Array.size_ofFn]; exact g.wellFormed, by rw [Array.size_ofFn]; exact g.labelled⟩
+  return { graph, kinds }
 
-unsafe def evalGraphUnsafe (n : Name) : TermElabM Graph := evalConst Graph n
-@[implemented_by evalGraphUnsafe] opaque evalGraph (n : Name) : TermElabM Graph
+/-- Build a DAG program and check it (`Dag.ofGraph`). -/
+def Dag.ofReactive (cells : List CellImpl) (r : DagM Unit) : Except String Dag := do
+  let dup := s!"two nodes are labelled `{inputMarker}."
+  let (_, g) ← r.build.mapError fun e =>
+    if e.startsWith dup then s!"the input '{((e.drop dup.length).takeWhile (· != '`')).toString}' \
+      is declared twice" else e
+  Dag.ofGraph cells g
 
-unsafe def evalCellsUnsafe (n : Name) : TermElabM (List (String × Nat)) :=
-  evalConst (List (String × Nat)) n
-@[implemented_by evalCellsUnsafe] opaque evalCells (n : Name) : TermElabM (List (String × Nat))
+/-- The error of a DAG, if it has one: what the check evaluates. -/
+def Dag.error? (d : Except String Dag) : Option String :=
+  match d with
+  | .ok _ => none
+  | .error e => some e
 
-/-- The cell references the driver generated: a `CellRef` in `LunDriver.Cells`,
-    defined by one of the generated `LunDriver.Cells.*` modules. -/
+unsafe def evalErrorUnsafe (n : Name) : TermElabM (Option String) := evalConst (Option String) n
+@[implemented_by evalErrorUnsafe] opaque evalError (n : Name) : TermElabM (Option String)
+
+/-- The cell operators the driver generated: in `LunDriver.Cells`, defined by
+    one of the generated `LunDriver.Cells.*` modules. -/
 def isCellRef (env : Environment) (c : Name) : Bool :=
   let generated := match env.getModuleIdxFor? c with
     | some idx => (`LunDriver.Cells).isPrefixOf (env.header.moduleNames[idx.toNat]!)
@@ -278,14 +400,14 @@ def isCellRef (env : Environment) (c : Name) : Bool :=
   generated && (`LunDriver.Cells).isPrefixOf c &&
     ((env.find? c).map (·.type.getAppFn.isConstOf ``CellRef)).getD false
 
-/-- The DAG check: the definition `dagName` builds only with checked cells
-    (see the module documentation), and the graph `graphName` it builds is
-    valid for the declared cells' arities `cells`. -/
-def checkDag (dagName graphName cellsName : Name) : TermElabM Unit := do
+/-- The DAG check: the definition `dagName` uses none of the builder's
+    primitives and no `sorry` (see the module documentation), and the error
+    `errorName` evaluates to — its graph checked by `Dag.ofGraph` — is none. -/
+def checkDag (dagName errorName : Name) : TermElabM Unit := do
   let env ← getEnv
   if (← collectAxioms dagName).contains ``sorryAx then throwError "the DAG depends on `sorry`"
   -- Walk every constant the definition reaches, through everything that is
-  -- not library code, stopping at the generated cell references.
+  -- not library code, stopping at the generated cell operators.
   let trusted (c : Name) : Bool := match env.getModuleIdxFor? c with
     | some idx => trustedModule (env.header.moduleNames[idx.toNat]!)
     | none => false
@@ -309,27 +431,113 @@ def checkDag (dagName graphName cellsName : Name) : TermElabM Unit := do
         unless trusted u || isCellRef env u || seen.contains u do
           todo := u :: todo
   unless todo.isEmpty do throwError "the DAG is too large to check"
-  match validateGraph (← evalCells cellsName) (← evalGraph graphName) with
-  | .ok () => pure ()
-  | .error e => throwError "invalid DAG: {e}"
+  if let some e ← evalError errorName then throwError "invalid DAG: {e}"
 
 /-- `lun_dag "name" := r#"program"#` — define the DAG `LunDriver.Dags.name`
-    from a `Reactive` program over the declared cells (and its graph,
+    from a `Reactive` program over the declared cells (and, checked,
     `LunDriver.Graphs.name`), then check it. -/
 elab "lun_dag " name:str " := " prog:str : command => do
   let t ← parseEmbeddedTerm prog
   let n := dottedName name.getString
   let dagName := `LunDriver.Dags ++ n
   let graphName := `LunDriver.Graphs ++ n
+  let errorName := `LunDriver.DagErrors ++ n
   let dagId := mkIdent dagName
   let graphId := mkIdent graphName
+  let errorId := mkIdent errorName
   let before := (← get).messages.toList.length
-  elabCommand (← `(def $dagId : Control.Reactive.Reactive Unit := Functor.discard ($t)))
+  elabCommand (← `(def $dagId : LunDriver.DagM Unit := Functor.discard ($t)))
   -- An ill-typed program is already reported; checking its error-recovery
   -- stand-in would only add a spurious `sorry`.
   if (← get).messages.toList.drop before |>.any (·.severity == .error) then return
-  elabCommand (← `(def $graphId : Control.Reactive.Graph := Control.Reactive.Reactive.graph $dagId))
-  withRef prog <| liftTermElabM (checkDag dagName graphName `LunDriver.cellArities)
+  elabCommand (← `(def $graphId : Except String LunDriver.Dag :=
+    LunDriver.Dag.ofReactive $(mkIdent `LunDriver.cellImpls) $dagId))
+  elabCommand (← `(def $errorId : Option String := LunDriver.Dag.error? $graphId))
+  withRef prog <| liftTermElabM (checkDag dagName errorName)
+
+-- ── Running a DAG ───────────────────────────────────────────────────────────
+
+/-- The nodes shown: inputs and cell applications, not start sources. Their
+    positions in this list are the ids a DAG's nodes are known by. -/
+def Dag.shown (d : Dag) : List Nat :=
+  (List.range d.kinds.size).filter fun i => d.kinds[i]? != some .start
+
+/-- The id of graph node `i` among the shown nodes. -/
+def Dag.idOf (d : Dag) (i : Nat) : Nat := (d.shown.idxOf? i).getD i
+
+/-- One node, for `describe` and DAG results. -/
+def Dag.nodeJson (d : Dag) (i : Nat) : List (String × Json) :=
+  match d.kinds[i]? with
+  | some (.input name) => [("id", d.idOf i), ("input", name)]
+  | some (.cell c args) => [("id", d.idOf i), ("cell", c), ("args", toJson (args.map d.idOf))]
+  | _ => [("id", d.idOf i)]
+
+/-- The shown nodes a shown node reads. -/
+def Dag.argsOf (d : Dag) (i : Nat) : List Nat :=
+  match d.kinds[i]? with
+  | some (.cell _ args) => args
+  | _ => []
+
+/-- What happened to a node in a run. -/
+inductive Outcome where
+  | value (v : Json)
+  | failed (message : String)
+  /-- It did not run: its argument (a graph index) has no value. -/
+  | skipped (arg : Nat)
+
+/-- A DAG request: `{"inputs": {"name": value, …}}`. Every input and every
+    cell of no inputs is fed once, at time 0 (a missing input is fed an
+    `error`), and the graph runs to the end (linen's `Graph.runM`). The result
+    has one entry per shown node, in order, with its `output`, its own
+    `error`, or the node it was `skipped` because of: its first argument
+    without a value. -/
+def runDag (d : Dag) (req : Json) : IO (Except String Json) := do
+  let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
+  let occurrences : List (Occurrence Json) := (List.range d.kinds.size).filterMap fun i =>
+    match (d.kinds[i]? : Option NodeKind) with
+    | some (.input name) => some ⟨0, ⟨i⟩, match inputs.getObjVal? name with
+        | .ok v => .next v
+        | .error _ => .error s!"missing input '{name}'"⟩
+    | some .start => some ⟨0, ⟨i⟩, .next Json.null⟩
+    | _ => none
+  let trace ← d.graph.runM occurrences
+  let emitted (i : Nat) : Outcome :=
+    let events := (trace.events ⟨i⟩).map (·.2)
+    match events.reverse.findSome? (fun | .next v => some v | _ => none) with
+    | some v => .value v
+    | none => match events.findSome? (fun | .error e => some e | _ => none) with
+      | some e => .failed e
+      | none => .failed "no value"
+  let mut outcomes : Array Outcome := #[]
+  for i in [0:d.kinds.size] do
+    let blocked := (d.argsOf i).find? fun j => match outcomes[j]? with
+      | some (.value _) => false
+      | _ => true
+    outcomes := outcomes.push (match blocked with
+      | some j => .skipped j
+      | none => emitted i)
+  let nodes := d.shown.map fun i =>
+    let result : List (String × Json) := match (outcomes[i]? : Option Outcome) with
+      | some (.value v) => [("output", v)]
+      | some (.failed e) => [("error", e)]
+      | some (.skipped j) => [("skipped", d.idOf j)]
+      | none => []
+    Json.mkObj (d.nodeJson i ++ result)
+  pure (.ok (Json.mkObj [("nodes", Json.arr nodes.toArray)]))
+
+/-- The build's cells and DAGs, with each DAG's structure: its nodes, its
+    sources (nodes reading none) and its sinks (nodes none reads). -/
+def describe (cells : List CellImpl) (dags : List (String × Dag)) : Json :=
+  Json.mkObj
+    [ ("cells", Json.arr (cells.map fun c => Json.mkObj
+        [("name", c.name), ("signature", c.signature), ("arity", c.arity)]).toArray)
+    , ("dags", Json.arr (dags.map fun (name, d) =>
+        let read := d.shown.flatMap d.argsOf
+        Json.mkObj
+          [ ("name", name)
+          , ("nodes", Json.arr (d.shown.map fun i => Json.mkObj (d.nodeJson i)).toArray)
+          , ("sources", toJson ((d.shown.filter fun i => (d.argsOf i).isEmpty).map d.idOf))
+          , ("sinks", toJson ((d.shown.filter fun i => !read.contains i).map d.idOf)) ]).toArray) ]
 
 -- ── The protocol ────────────────────────────────────────────────────────────
 
@@ -370,42 +578,6 @@ def runCell (c : CellImpl) (req : Json) : IO (Except String Json) := do
     let input := (req.getObjVal? "input").toOption
     pure (.ok (outcomeJson (← c.run input)))
 
-/-- One node, for `describe` and DAG results. -/
-def nodeJson (i : Nat) : Node → List (String × Json)
-  | .input name => [("id", i), ("input", name)]
-  | .apply cell args => [("id", i), ("cell", cell), ("args", toJson args)]
-
-/-- A DAG request: `{"inputs": {"name": value, …}}`. The result has one entry
-    per node, in order, with its `output`, its own `error`, or the node it was
-    `skipped` because of. -/
-def runDag (cells : List CellImpl) (g : Graph) (req : Json) : IO (Except String Json) := do
-  let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
-  let outcomes ← g.evalM (fun name => (inputs.getObjVal? name).toOption) fun cell vs => do
-    match cells.find? (·.name == cell) with
-    | none => pure (.error s!"unknown cell '{cell}'")
-    | some c => try pure (.ok (← c.call vs)) catch e => pure (.error (toString e))
-  let nodes := (List.range g.size).map fun i =>
-    let node := (g.node? i).getD default
-    let result : List (String × Json) := match outcomes[i]? with
-      | some (.value v) => [("output", v)]
-      | some (.failed e) => [("error", e)]
-      | some (.skipped j) => [("skipped", j)]
-      | none => []
-    Json.mkObj (nodeJson i node ++ result)
-  pure (.ok (Json.mkObj [("nodes", Json.arr nodes.toArray)]))
-
-/-- The build's cells and DAGs, with each DAG's structure. -/
-def describe (cells : List CellImpl) (dags : List (String × Graph)) : Json :=
-  Json.mkObj
-    [ ("cells", Json.arr (cells.map fun c => Json.mkObj
-        [("name", c.name), ("signature", c.signature), ("arity", c.arity)]).toArray)
-    , ("dags", Json.arr (dags.map fun (name, g) => Json.mkObj
-        [ ("name", name)
-        , ("nodes", Json.arr ((List.range g.size).map fun i =>
-            Json.mkObj (nodeJson i ((g.node? i).getD default))).toArray)
-        , ("sources", toJson g.sources)
-        , ("sinks", toJson g.sinks) ]).toArray) ]
-
 /-- The driver's protocol. One JSON request on stdin, one JSON response on
     stdout; cells' traces go to stderr.
 
@@ -416,7 +588,8 @@ def describe (cells : List CellImpl) (dags : List (String × Graph)) : Json :=
     Exit code `0` for a response (which may report per-call errors), `1` for a
     request that could not be served (`{"error": …}` on stdout), `2` for a bad
     command line. -/
-def driverMain (cells : List CellImpl) (dags : List (String × Graph)) (args : List String) :
+def driverMain (cells : List CellImpl) (dags : List (String × Except String Dag))
+    (args : List String) :
     IO UInt32 := do
   let respond (r : Except String Json) : IO UInt32 := do
     match r with
@@ -426,7 +599,10 @@ def driverMain (cells : List CellImpl) (dags : List (String × Graph)) (args : L
     let text ← (← IO.getStdin).readToEnd
     pure (if text.trimAscii.isEmpty then .ok (Json.mkObj []) else Json.parse text)
   match args with
-  | ["describe"] => respond (.ok (describe cells dags))
+  | ["describe"] =>
+    match dags.findSome? fun (name, d) => (Dag.error? d).map (name, ·) with
+    | some (name, e) => respond (.error s!"DAG '{name}': {e}")
+    | none => respond (.ok (describe cells (dags.filterMap fun (n, d) => d.toOption.map (n, ·))))
   | ["cell", name] =>
     match cells.find? (·.name == name) with
     | none => respond (.error s!"no cell named '{name}'")
@@ -436,9 +612,10 @@ def driverMain (cells : List CellImpl) (dags : List (String × Graph)) (args : L
   | ["dag", name] =>
     match dags.lookup name with
     | none => respond (.error s!"no DAG named '{name}'")
-    | some g => match ← request with
+    | some (.error e) => respond (.error s!"DAG '{name}': {e}")
+    | some (.ok d) => match ← request with
       | .error e => respond (.error s!"request is not JSON: {e}")
-      | .ok req => respond (← runDag cells g req)
+      | .ok req => respond (← runDag d req)
   | _ =>
     IO.eprintln "usage: lun-driver (describe | cell NAME | dag NAME)"
     pure 2

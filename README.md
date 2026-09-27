@@ -18,10 +18,11 @@ serves each cell and each DAG over HTTP. (The projects it runs are the ones
   `Lean.FromJson` type), or `Unit` for none; the result is linen's effect
   monad `Eff` over a row of effects, producing a JSON value (`Lean.ToJson`).
   The row is the cell's effect whitelist.
-- **A DAG** is a program in linen's `Reactive` monad (`Control.Reactive`):
-  named `input`s, and cells applied to signals. Cells can be applied any number
-  of times. A DAG is acyclic by construction, and applying a cell to signals of
-  the wrong types does not compile.
+- **A DAG** is a program in linen's `Reactive` monad (`Control.Reactive`,
+  linen ≥ 1.3.0): named `input`s, and cells applied to observables (each
+  application is a `combineLatest` over the cell). Cells can be applied any
+  number of times. A DAG is acyclic by construction, and applying a cell to
+  observables of the wrong types does not compile.
 
 ```lean
 do
@@ -48,9 +49,11 @@ the program) or project concerned, unless:
     the project defines);
   - it is not `unsafe` and does not depend on `sorry`;
 - each DAG builds its graph only through `input` and the declared cells (its
-  definition is walked through every non-library constant it reaches; forging a
-  `Cell`, a node or a graph is refused), does not depend on `sorry`, and its
-  graph applies declared cells with their arity and names each input once.
+  definition is walked through every non-library constant it reaches; the
+  graph builder's primitives are refused), does not depend on `sorry`, and its
+  graph consists only of inputs, each named once, and applications of declared
+  cells with their arity — linen's other operators are refused. Every function
+  in the graph is replaced by the declared cell it names before it runs.
 
 Signatures and DAG programs are Lean text, parsed as exactly one term each
 (they are embedded as raw string literals, never spliced as code).
@@ -95,7 +98,7 @@ With `LUN_TOKEN` set, every route but `/_health` needs `Authorization: Bearer {t
 
 In signatures and DAGs, `Control.Monad.Effect` is open (so `Eff`,
 `Trace.Trace`, `Error.Error`, `HTTP.HTTP`, `FileSystem.FileSystem`), and in
-DAGs `Control.Reactive` (`input`) and the cells by name.
+DAGs `Control.Reactive`, `input` and the cells by name.
 
 The same request (same org) is the same build: submitting it again returns it.
 
@@ -122,8 +125,11 @@ A cell's `Trace` output comes back as `"log"`.
 ]}
 ```
 
-A failure stays with its node: its dependents are `skipped` (naming the node
-that caused it), and everything else still runs.
+The request is one instant of the DAG's reactive graph: every input (and
+every cell of no inputs) is fed once, a missing input is fed an error, and
+linen runs the graph (`Graph.runM`). A failure stays with its node: its
+dependents are `skipped` (naming their first argument without a value), and
+everything else still runs.
 
 ### Private repositories
 
@@ -168,14 +174,14 @@ podman run --rm -p 8080:8080 -v lun:/var/lib/lun \
 ```
 
 The image carries the Lean toolchain and a package cache of linen
-(`LINEN_REF`, default `v1.3.0`) pre-built for what cells need, so a build
+(`LINEN_REF`, default `v1.5.0`) pre-built for what cells need, so a build
 compiles only the project and its cells.
 
 ## Testing
 
 ```
 lake build LunTests          # unit tests (#guard)
-test/e2e.sh ../linen          # end to end, against a linen checkout (>= 1.3.0)
+test/e2e.sh ../linen          # end to end, against a linen checkout (>= 1.3.0; CI uses v1.5.0)
 ```
 
 `test/e2e.sh` turns `test/fixture` into a git repository, runs lun in local
