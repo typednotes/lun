@@ -3,7 +3,6 @@ import Lun.Spec
 import Lun.Driver
 import Lun.Manifest
 import Lun.Diagnostics
-import Lun.Process
 import Lun.Fetch
 import Lun.Build
 import Lun.Session

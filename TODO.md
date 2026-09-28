@@ -1,8 +1,10 @@
 # TODO
 
-Suggestions from the linen v1.6.1 dependency review (2026-09-28). The bump
-itself needed no code change (lun imports nothing linen 1.6.x changed). Each
-item names where it comes from; re-check before acting.
+Suggestions from the linen v1.6.1 dependency review (2026-09-28). The moves
+into linen were done in lun 0.2.2 with linen 1.7.0 (and lode, liaison in the
+same pass); also, the test library is `LunTest`, the package's `testDriver`
+(`lake test`), and CI and the Dockerfile take linen's native dependency list.
+Each open item names where it comes from; re-check before acting.
 
 Moves into linen follow linen's `AGENTS.md` ("Importing external code"): the
 linen change and the deletion here (and in lode) happen in the same pass.
@@ -34,25 +36,25 @@ linen change and the deletion here (and in lode) happen in the same pass.
   linen keeps one environment per distinct set of imports for the process's
   life, so a long-running server fed arbitrary projects still grows — ask linen
   for a bounded mode (e.g. the union of the allowed libraries, loaded once). (M–L)
-- [ ] **Constant-time compare and bearer auth into linen.** `constantTimeEq`
-  and `authorized` (`Lun/Server.lean:55-69`) are identical in lode; linen has
-  only `basicAuth`. Also read request bodies with linen's `requestSizeLimit`, as
-  lode does, instead of by hand (`Server.lean:45-52`). (S)
+- [x] **Constant-time compare into linen.** `Crypto.ConstantTime` (linen
+  1.7.0); lun's copy is gone. Still open: bearer auth as a linen middleware,
+  and reading request bodies with `requestSizeLimit` (`Server.lean`) as lode
+  does. (S)
 
-## Shared with lode — move into linen
+## Shared with lode — moved into linen (1.7.0)
 
-- [ ] **Process runner with deadline** (`Lun/Process.lean:30-69`) — lode's copy
-  is a superset (abort flag, binary output). linen's GitFn builds need the
-  same: they run `lake build` with no timeout (`linen/.../GitFn/Build.lean:89-92`). (S)
-- [ ] **lake log diagnostics parser** (`Lun/Diagnostics.lean`): `parse` is
-  byte-identical to lode's; GitFn could return parsed diagnostics too. lun's
-  scoping to its driver files stays here. (S)
-- [ ] **Validation and fetch helpers.** `Validate.lean:54-55` is
-  `CommitSha.isValid` (`linen/Linen/System/GitFn/Descriptor.lean:40-41`, which
-  lode already uses); branch/repo validators and the codeload tarball fetch are
-  near-identical to lode's; `Fetch.lean:45` re-implements linen's `urlEncode`;
-  package-cache seeding (`Build.lean:205-215`) duplicates lode's, which parses
-  the manifest with Lake's parser rather than by hand. (S–M)
+- [x] **Process runner with deadline** → `System.Process`; `Lun/Process.lean`
+  is gone. Fixes a bug lun had: after `Child.takeStdin`, Lean 4.34's
+  `Child.kill` signals the leader only, so a timed-out `lake build` left its
+  workers running and waited for them. linen's GitFn builds now have a
+  deadline too.
+- [x] **lake log diagnostics parser** → `System.LakeLog`; lun's scoping to its
+  driver files stays in `Lun/Diagnostics.lean`.
+- [x] **Validation helpers**: commit ids are `CommitSha.isValid`, branches and
+  repository URLs `System.Git.Remote`, `percentEncode` is linen's `urlEncode`.
+  Still open: package-cache seeding (`Build.lean`) duplicates lode's, which
+  parses the manifest with Lake's parser rather than by hand; the codeload
+  download stays (three lines per service). (S)
 
 ## Smaller
 

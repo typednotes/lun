@@ -19,6 +19,7 @@
 -/
 import Lean.Data.Json
 import Linen.Network.WebApp
+import Linen.Crypto.ConstantTime
 import Lun.Session
 
 namespace Lun
@@ -51,13 +52,6 @@ private def readBody (req : Network.WebApp.Request) : IO (Option String) := do
     if acc.size > maxBodyBytes then return none
   return String.fromUTF8? acc
 
-/-- Compare two strings in time independent of where they differ. -/
-def constantTimeEq (a b : String) : Bool :=
-  let x := a.toUTF8
-  let y := b.toUTF8
-  x.size == y.size &&
-    (List.range x.size).foldl (fun acc i => acc ||| (x[i]! ^^^ y[i]!)) (0 : UInt8) == 0
-
 /-- The request carries the configured token, if one is configured. -/
 def authorized (cfg : Config) (req : Network.WebApp.Request) : Bool :=
   match cfg.token with
@@ -65,7 +59,7 @@ def authorized (cfg : Config) (req : Network.WebApp.Request) : Bool :=
   | some token =>
     let header := (req.requestHeaders.find? (·.1 == Data.CI.mk' "Authorization")).map (·.2)
     match header with
-    | some h => constantTimeEq h s!"Bearer {token}"
+    | some h => Crypto.ConstantTime.eqString h s!"Bearer {token}"
     | none => false
 
 private def submit (b : Builder) (req : Network.WebApp.Request) : IO Network.WebApp.Response := do

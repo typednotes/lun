@@ -7,11 +7,7 @@ open Lun
 
 namespace LunTests.Server
 
-#guard constantTimeEq "Bearer abc" "Bearer abc"
-#guard !constantTimeEq "Bearer abc" "Bearer abd"
-#guard !constantTimeEq "Bearer abc" "Bearer ab"
-#guard !constantTimeEq "" "x"
-
+-- (The token comparison is linen's `Crypto.ConstantTime`, tested there.)
 #guard (statusOf 201).statusCode == 201
 #guard (statusOf 202).statusCode == 202
 #guard (statusOf 504).statusCode == 504

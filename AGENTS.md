@@ -8,16 +8,17 @@ inputs, get back what changed). The vocabulary is linen's: functions, graphs,
 inputs, nodes, sessions. See `README.md` for the API.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
-Built on `linen` (pinned `v1.6.2` for lun itself; user projects need
+Built on `linen` (pinned `v1.7.0` for lun itself; user projects need
 linen ≥ `1.3.0`, the first with the `Control.Reactive` the runtime uses).
 Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
-`v0.5.4`).
+`v0.5.5`).
 
 ## Layout
 
 - `Lun/Validate.lean` — the grammar of every string a request carries
-  (names, branch, commit, project path, repository URL, embedded Lean text).
-  Pure.
+  (names, commit, project path, embedded Lean text). Pure. Branch names and
+  repository URLs are linen's `System.Git.Remote` (`isBranchName`,
+  `Repository.parse`), which lode uses too, so the two agree.
 - `Lun/Spec.lean` — the build request: `BuildSpec.parse` (the only place a
   request is interpreted) and `BuildSpec.canonical` (no credentials; what ids
   are computed from and what is persisted). A warrant is decoded with
@@ -44,12 +45,13 @@ Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
   protocol). It imports linen ≥ 1.3.0 modules
   (verified against 1.3.0 and 1.5.0), so it is **not** part of lun's own
   build: it is compiled only inside a driver. `test/e2e.sh` is what
-  exercises it; `LunTests/Lun/DriverTest.lean` only checks it is embedded.
-- `Lun/Diagnostics.lean` — `lake build` output → diagnostics attributed to a
-  function, graph (with the line in the program), the project, the driver, or the
-  build. Pure.
-- `Lun/Process.lean` — run a command with a deadline (process group killed),
-  `hermeticGit` (host git config ignored).
+  exercises it; `LunTest/Lun/DriverTest.lean` only checks it is embedded.
+- `Lun/Diagnostics.lean` — `lake build` diagnostics (parsed by linen's
+  `System.LakeLog`) attributed to a function, graph (with the line in the
+  program), the project, the driver, or the build. Pure.
+- Commands run through linen's `System.Process.run` (deadline, process group
+  killed) with its `hermeticGit`; the bearer token is compared with linen's
+  `Crypto.ConstantTime`.
 - `Lun/Fetch.lean` — `git` for public repositories; GitHub/GitLab REST
   through liaison for private ones.
 - `Lun/Build.lean` — ids, statuses (`status.json`, atomic writes), the build
@@ -72,7 +74,7 @@ Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
 ## Running tests
 
 ```
-lake build LunTests
+lake test
 test/e2e.sh ../linen      # needs jq, git, and a linen checkout >= 1.3.0
 ```
 
@@ -90,7 +92,7 @@ takes a couple of minutes (it builds the fixture's driver ten times).
 - liaison's wire format is liaison's: lun imports `Liaison.Wire` (the module
   liaison's server parses with, tested there) and never writes or reads
   `POST /v0/egress` JSON itself. Import nothing else from liaison: `lun`
-  builds only `Liaison.Wire` and the warrant types. (`LunTests`, being
+  builds only `Liaison.Wire` and the warrant types. (`LunTest`, being
   `precompileModules`, builds liaison's whole library as a shared object;
   that is harmless — a library link — but it is why it builds liaison's
   Postgres modules.)

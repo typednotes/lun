@@ -51,7 +51,7 @@ structure Credentials where
 
 /-- Where the project comes from. -/
 structure Source where
-  repo : Validate.Repo
+  repo : System.Git.Repository
   branch : String
   commit : String
   /-- The project directory within the repository (`""` for its root). -/
@@ -108,7 +108,7 @@ private def array (j : Json) (ctx name : String) : Except String (List Json) :=
 private def check (ok : Bool) (msg : String) : Except String Unit :=
   if ok then pure () else throw msg
 
-private def parseCredentials (j : Json) (repo : Validate.Repo) : Except String Credentials := do
+private def parseCredentials (j : Json) (repo : System.Git.Repository) : Except String Credentials := do
   let warrantJson ← field j "source.credentials" "warrant"
   let account ← string j "source.credentials" "account"
   let warrant ← (Data.Json.Decode.decode warrantJson.compress >>= Liaison.Wire.decodeWarrant)
@@ -125,9 +125,9 @@ private def parseCredentials (j : Json) (repo : Validate.Repo) : Except String C
 
 private def parseSource (j : Json) (allowLocal : Bool) : Except String Source := do
   let url ← string j "source" "url"
-  let repo ← Validate.repo url allowLocal |>.mapError ("source.url: " ++ ·)
+  let repo ← System.Git.Repository.parse url allowLocal |>.mapError ("source.url: " ++ ·)
   let branch ← string j "source" "branch"
-  check (Validate.branch branch) "source.branch: not a valid branch name"
+  check (System.Git.isBranchName branch) "source.branch: not a valid branch name"
   let commit ← string j "source" "commit"
   check (Validate.commit commit) "source.commit: must be a full 40- or 64-digit lowercase hex object name"
   let path ← match optional j "path" with

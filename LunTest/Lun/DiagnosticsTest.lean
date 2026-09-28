@@ -28,21 +28,20 @@ def ds : List Diagnostic := parse log
 #guard ds[0]!.file == some "LunDriver/Functions/F5.lean" && ds[0]!.line == some 4 && ds[0]!.column == some 23
 -- Continuation lines belong to the message; the next header ends it.
 #guard ds[0]!.message == "Type mismatch\n  Fixture.double\nhas type\n  Nat → Eff [] Nat"
-#guard ds[0]!.scope == .function 5
-#guard ds[1]!.scope == .graph 1
-#guard ds[2]!.severity == "warning" && ds[2]!.scope == .project
-#guard ds[3]!.scope == .driver
-#guard ds[4]!.scope == .build && ds[4]!.file == none && ds[4]!.message == "build failed"
+#guard scope ds[0]! == .function 5
+#guard scope ds[1]! == .graph 1
+#guard ds[2]!.severity == "warning" && scope ds[2]! == .project
+#guard scope ds[3]! == .driver
+#guard scope ds[4]! == .build && ds[4]!.file == none && ds[4]!.message == "build failed"
 
 -- A graph position becomes a position in the program.
-#guard (ds[1]!.inProgram (3, 22)).line == some 4
-#guard ({ ds[1]! with line := some 3, column := some 30 }.inProgram (3, 22)).column == some 8
-#guard ({ ds[1]! with line := some 2 }.inProgram (3, 22)).line == none
+#guard (inProgram ds[1]! (3, 22)).line == some 4
+#guard (inProgram { ds[1]! with line := some 3, column := some 30 } (3, 22)).column == some 8
+#guard (inProgram { ds[1]! with line := some 2 } (3, 22)).line == none
 
 #guard (linenTooOldHint ds[3]!).isSome
 #guard (linenTooOldHint ds[0]!).isNone
 
-#guard splitLocation "a.lean:1:2: x: y" == (some "a.lean", some 1, some 2, "x: y")
-#guard splitLocation "build failed" == (none, none, none, "build failed")
+-- (Parsing itself is linen's `System.LakeLog`, tested there.)
 
 end LunTests.Diagnostics

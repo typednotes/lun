@@ -42,7 +42,7 @@ import Lun.Spec
 import Lun.Driver
 import Lun.Manifest
 import Lun.Diagnostics
-import Lun.Process
+import Linen.System.Process
 import Lun.Fetch
 
 namespace Lun
@@ -161,11 +161,11 @@ private def appendLog (cfg : Config) (id : String) (text : String) : IO Unit := 
 
 /-- A diagnostic as a status reports it, with what it is about. -/
 def diagnosticJson (spec : BuildSpec) (d : Diagnostics.Diagnostic) : Json :=
-  let (scope, name, d) : String × Option String × Diagnostics.Diagnostic := match d.scope with
+  let (scope, name, d) : String × Option String × Diagnostics.Diagnostic := match Diagnostics.scope d with
     | .function i => ("function", (spec.functions[i]?.map (·.name)), d)
     | .graph j => ("graph", (spec.graphs[j]?.map (·.name)),
         match spec.graphs[j]? with
-        | some dg => d.inProgram (Driver.graphProgramStart spec.opens dg)
+        | some dg => Diagnostics.inProgram d (Driver.graphProgramStart spec.opens dg)
         | none => d)
     | .project => ("project", none, d)
     | .driver => ("driver", none, d)
@@ -179,7 +179,7 @@ def diagnosticJson (spec : BuildSpec) (d : Diagnostics.Diagnostic) : Json :=
 /-- The diagnostics worth reporting: every error, and warnings about functions
     and graphs (not the project's or linen's own warnings). -/
 def reportable (d : Diagnostics.Diagnostic) : Bool :=
-  d.severity == "error" || match d.scope with
+  d.severity == "error" || match Diagnostics.scope d with
     | .function _ | .graph _ => true
     | _ => false
 
@@ -211,7 +211,7 @@ private def seedCache (b : Builder) (id : String) (m : Manifest.Manifest) : IO U
   unless ← cached.pathExists do return
   let dest := driverDir b.cfg id / ".lake" / "packages"
   IO.FS.createDirAll dest
-  let r ← Process.run "cp" #["-R", cached.toString, (dest / "linen").toString] b.cfg.fetchTimeoutMs
+  let r ← System.Process.run "cp" #["-R", cached.toString, (dest / "linen").toString] b.cfg.fetchTimeoutMs
   appendLog b.cfg id s!"seeded linen {rev} from the package cache: {if r.ok then "ok" else r.describe "cp"}"
 
 /-- What fetching and checking produce: the project, ready to build. -/
@@ -263,7 +263,7 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
     IO.FS.writeFile file contents
   seedCache b id p.manifest
   -- 4. build. Lake clones the project's dependencies (linen) with git.
-  let r ← Process.run "lake" #["build"] cfg.buildTimeoutMs (cwd := driver) (env := Process.hermeticGit)
+  let r ← System.Process.run "lake" #["build"] cfg.buildTimeoutMs (cwd := driver) (env := System.Process.hermeticGit)
   appendLog cfg id r.stdout
   appendLog cfg id r.stderr
   unless r.ok do
@@ -277,7 +277,7 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
           error := some error }
     return
   -- 5. describe
-  let d ← Process.run (driverExe cfg id).toString #["describe"] cfg.callTimeoutMs
+  let d ← System.Process.run (driverExe cfg id).toString #["describe"] cfg.callTimeoutMs
   unless d.ok do throw (IO.userError (d.describe "lun-driver describe"))
   let description ← IO.ofExcept (Json.parse d.stdout |>.mapError IO.userError)
   let warnings := (Diagnostics.parse r.stdout).filter reportable
@@ -346,7 +346,7 @@ def Builder.call (b : Builder) (id kind name : String) (request : String) : IO A
       xs.any fun x => (x.getObjValAs? String "name").toOption == some name
   unless listed == some true do
     return errorAnswer 404 s!"the build has no {if kind == "function" then "function" else "graph"} named '{name}'"
-  let r ← Process.run (driverExe b.cfg id).toString #[kind, name] b.cfg.callTimeoutMs (input := request)
+  let r ← System.Process.run (driverExe b.cfg id).toString #[kind, name] b.cfg.callTimeoutMs (input := request)
   let status := match r.exitCode with
     | some 0 => 200 | some 1 => 400 | none => 504 | some _ => 502
   if status == 504 then return errorAnswer 504 s!"the {kind} did not answer within the time limit"

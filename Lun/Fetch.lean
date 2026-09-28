@@ -22,9 +22,10 @@
 -/
 import Lean.Data.Json
 import Linen.Network.HTTP.Simple
+import Linen.Network.HTTP.Types.URI
 import Linen.Data.Time.Clock
 import Lun.Spec
-import Lun.Process
+import Linen.System.Process
 
 namespace Lun.Fetch
 
@@ -41,13 +42,9 @@ structure Context where
 
 -- ── URLs ────────────────────────────────────────────────────────────────────
 
-/-- Percent-encode everything but RFC 3986's unreserved characters. -/
-def percentEncode (s : String) : String :=
-  let hex (n : Nat) : Char := "0123456789ABCDEF".toList[n]!
-  String.join <| s.toUTF8.toList.map fun b =>
-    let c := Char.ofNat b.toNat
-    if b < 128 && (c.isAlphanum || c == '-' || c == '.' || c == '_' || c == '~') then c.toString
-    else String.ofList ['%', hex (b.toNat / 16), hex (b.toNat % 16)]
+/-- Percent-encode everything but RFC 3986's unreserved characters
+    (linen's `Network.HTTP.Types.urlEncode`). -/
+def percentEncode (s : String) : String := Network.HTTP.Types.urlEncode s
 
 /-- The GitHub API URLs for the branch check and the tarball. -/
 def githubUrls (owner repo branch commit : String) : String × String :=
@@ -110,7 +107,7 @@ def unpack (ctx : Context) (archive : ByteArray) (dest : System.FilePath) : IO U
   let file := dest.withExtension "tar.gz"
   IO.FS.writeBinFile file archive
   IO.FS.createDirAll dest
-  let r ← Process.run "tar" #["-xzf", file.toString, "-C", dest.toString, "--strip-components=1"]
+  let r ← System.Process.run "tar" #["-xzf", file.toString, "-C", dest.toString, "--strip-components=1"]
     ctx.timeoutMs
   IO.FS.removeFile file
   unless r.ok do throw (IO.userError (r.describe "tar"))
@@ -118,8 +115,8 @@ def unpack (ctx : Context) (archive : ByteArray) (dest : System.FilePath) : IO U
 -- ── The three ways ──────────────────────────────────────────────────────────
 
 private def git (ctx : Context) (args : Array String) (cwd : Option System.FilePath := none) :
-    IO Process.Result :=
-  Process.run "git" args ctx.timeoutMs cwd (env := Process.hermeticGit)
+    IO System.Process.Result :=
+  System.Process.run "git" args ctx.timeoutMs cwd (env := System.Process.hermeticGit)
 
 /-- A public repository, with `git`. -/
 def withGit (ctx : Context) (src : Source) (dest : System.FilePath) : IO Unit := do

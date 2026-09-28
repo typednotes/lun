@@ -6,15 +6,16 @@ open System Lake DSL
 -- `liaison` it needs no extra link arguments: Lean's toolchain links OpenSSL
 -- statically into every executable already.
 
-require linen from git "https://github.com/typednotes/linen" @ "v1.6.2"
+require linen from git "https://github.com/typednotes/linen" @ "v1.7.0"
 
 -- For `Liaison.Wire` only: liaison's wire format (`POST /v0/egress`), the
 -- module liaison's own server parses with. It is pure and imports none of
 -- liaison's HMAC, Postgres or egress code, so it adds no link arguments.
-require liaison from git "https://github.com/typednotes/liaison" @ "v0.5.4"
+require liaison from git "https://github.com/typednotes/liaison" @ "v0.5.5"
 
 package lun where
-  version := v!"0.2.1"
+  version := v!"0.2.2"
+  testDriver := "LunTest"
 
 -- The driver runtime, embedded in `Lun.Driver` with `include_str`. Lake does
 -- not see through `include_str`, so without this `needs` an edited runtime
@@ -27,10 +28,9 @@ input_file driverRuntime where
 lean_lib Lun where
   needs := #[driverRuntime]
 
--- Named `LunTests` (module tree `LunTests.*`), not `Tests`: `linen` has its
--- own `Tests.*` tree, and two packages declaring the same top-level module
--- prefix confuse Lake's module lookup (see `liaison/lakefile.lean`).
-lean_lib LunTests where
+-- Named `LunTest` (module tree `LunTest.*`), the `{Package}Test` convention
+-- of mathlib, batteries and aesop, and the package's `testDriver` (`lake test`).
+lean_lib LunTest where
   precompileModules := true
 
 @[default_target]
