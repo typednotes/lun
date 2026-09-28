@@ -11,10 +11,10 @@ require linen from git "https://github.com/typednotes/linen" @ "v1.6.2"
 -- For `Liaison.Wire` only: liaison's wire format (`POST /v0/egress`), the
 -- module liaison's own server parses with. It is pure and imports none of
 -- liaison's HMAC, Postgres or egress code, so it adds no link arguments.
-require liaison from git "https://github.com/typednotes/liaison" @ "v0.5.3"
+require liaison from git "https://github.com/typednotes/liaison" @ "v0.5.4"
 
 package lun where
-  version := v!"0.2.0"
+  version := v!"0.2.1"
 
 -- The driver runtime, embedded in `Lun.Driver` with `include_str`. Lake does
 -- not see through `include_str`, so without this `needs` an edited runtime
