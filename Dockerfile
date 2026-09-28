@@ -8,7 +8,7 @@
 # C/C++ toolchain with static libstdc++ for sealing it).
 #
 #   podman build -t lun .
-#   podman build --build-arg LINEN_REF=v1.5.0 -t lun .
+#   podman build --build-arg LINEN_REF=v1.6.1 -t lun .
 #
 # LINEN_REF is the linen version pre-built into the package cache. Projects
 # locked to that exact revision start from it; any other revision builds its
@@ -40,7 +40,7 @@ RUN lake build lun
 
 # ── The package cache: linen, built for the driver runtime's imports ─────────
 FROM base AS cache
-ARG LINEN_REF=v1.5.0
+ARG LINEN_REF=v1.6.1
 WORKDIR /warm
 RUN cp /tmp/lean-toolchain lean-toolchain \
     && printf '%s\n' \
