@@ -5,7 +5,7 @@
 #
 #   Examples/run.sh [LINEN_DIR] [-- CLIENT OPTIONS…]
 #
-# The project pins linen v1.9.0 from GitHub, so the first build clones and
+# The project pins linen v1.9.1 from GitHub, so the first build clones and
 # compiles linen (minutes). With LINEN_DIR (a linen checkout, >= 1.3.0) the
 # project takes linen from there instead and reuses its build. Either way lun
 # runs in local mode (LUN_ALLOW_LOCAL=1), which admits the file:// repository
