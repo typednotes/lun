@@ -7,7 +7,7 @@
 # LINEN_REF (`ci/native-deps/apt.txt`).
 #
 #   podman build -t lun .
-#   podman build --build-arg LINEN_REF=v1.7.0 -t lun .
+#   podman build --build-arg LINEN_REF=v1.9.0 -t lun .
 #
 # LINEN_REF is the linen version pre-built into the package cache. Projects
 # locked to that exact revision start from it; any other revision builds its
@@ -15,7 +15,7 @@
 # version with `Control.Reactive` and `Control.Monad.Effect.Handler`.
 
 FROM docker.io/library/ubuntu:24.04 AS base
-ARG LINEN_REF=v1.7.0
+ARG LINEN_REF=v1.9.0
 ADD https://raw.githubusercontent.com/typednotes/linen/${LINEN_REF}/ci/native-deps/apt.txt /tmp/linen-apt.txt
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tar gzip $(sed 's/#.*//' /tmp/linen-apt.txt) \
@@ -40,7 +40,7 @@ RUN lake build lun
 
 # ── The package cache: linen, built for the driver runtime's imports ─────────
 FROM base AS cache
-ARG LINEN_REF=v1.7.0
+ARG LINEN_REF=v1.9.0
 WORKDIR /warm
 RUN cp /tmp/lean-toolchain lean-toolchain \
     && printf '%s\n' \

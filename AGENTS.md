@@ -8,7 +8,7 @@ inputs, get back what changed). The vocabulary is linen's: functions, graphs,
 inputs, nodes, sessions. See `README.md` for the API.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
-Built on `linen` (pinned `v1.7.0` for lun itself; user projects need
+Built on `linen` (pinned `v1.9.0` for lun itself; user projects need
 linen ≥ `1.3.0`, the first with the `Control.Reactive` the runtime uses).
 Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
 `v0.5.5`).
