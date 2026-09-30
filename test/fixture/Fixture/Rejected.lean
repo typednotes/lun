@@ -23,4 +23,12 @@ def sneaky (n : Nat) : Eff [Anything] Nat := send (Anything.io (pure n))
 /-- Unfinished. -/
 def unfinished (n : Nat) : Eff [] Nat := sorry
 
+unsafe def replacement (n : Nat) : Eff [] Nat := pure (n + 100)
+@[implemented_by replacement]
+def replaced (n : Nat) : Eff [] Nat := pure n
+def indirectReplacement (n : Nat) : Eff [] Nat := replaced n
+
+axiom forgedProof : False
+def forged (n : Nat) : Eff [] Nat := False.elim forgedProof
+
 end Fixture.Rejected

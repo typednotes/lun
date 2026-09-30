@@ -14,7 +14,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 linen="$(cd "${1:-$root/../linen}" && pwd)"
 port="${LUN_E2E_PORT:-$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}"
-work="$(mktemp -d /tmp/lun-e2e.XXXXXX)"
+work="$(mktemp -d "${LUN_E2E_TMPDIR:-/tmp}/lun-e2e.XXXXXX")"
 base="http://127.0.0.1:$port"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -43,19 +43,29 @@ unrelated="$(git -C "$repo" rev-parse HEAD)"
 git -C "$repo" checkout -q main
 
 # ── lun ────────────────────────────────────────────────────────────────────
-(cd "$root" && lake build lun >/dev/null)
-LUN_WORKDIR="$work/lun" LUN_PORT="$port" LUN_ALLOW_LOCAL=1 LUN_TOKEN=secret \
+broker_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+python3 "$here/mock_broker.py" "$broker_port" >"$work/broker.log" 2>&1 &
+broker_pid=$!
+if [ -n "${LUN_E2E_WORKSPACE:-}" ]; then
+  (cd "$LUN_E2E_WORKSPACE" && lake build @lun/lun >/dev/null)
+else
+  (cd "$root" && lake build lun >/dev/null)
+fi
+LUN_WORKDIR="$work/lun" LUN_PORT="$port" LUN_ALLOW_LOCAL=1 LUN_TOKEN=secret LUN_LIAISON_SDK_PATH="$root/../liaison" LUN_TEMP_ROOT="$work/temporary" LUN_LIAISON_URL="http://127.0.0.1:$broker_port" \
   LUN_ID_SALT=e2e "$root/.lake/build/bin/lun" >"$work/lun.log" 2>&1 &
 lun_pid=$!
-trap 'kill $lun_pid 2>/dev/null || true' EXIT
+trap 'kill $lun_pid $broker_pid 2>/dev/null || true' EXIT
 for _ in $(seq 50); do curl -sf "$base/_health" >/dev/null && break; sleep 0.2; done
 curl -sf "$base/_health" >/dev/null || fail "lun did not start: $(cat "$work/lun.log")"
 pass "health"
 
 api() { # METHOD PATH [BODY] -> prints "STATUS BODY"
-  local out
+  local out body="${3:-}"
+  if [ -n "$body" ] && [[ "$2" != /v0/builds ]]; then
+    body="$(jq 'if has("policy") or has("binding") then . else . + {policy:{effects:["Trace","Error"],domains:[]},binding:{org_id:"org-1",user_id:"user-1"}} end' <<<"$body")"
+  fi
   out="$(curl -s -o /dev/stdout -w '\n%{http_code}' -X "$1" -H 'Authorization: Bearer secret' \
-    -H 'Content-Type: application/json' ${3:+--data-binary "$3"} "$base$2")"
+    -H 'Content-Type: application/json' ${body:+--data-binary "$body"} "$base$2")"
   echo "$(tail -n1 <<<"$out") $(sed '$d' <<<"$out")"
 }
 expect() { # DESCRIPTION EXPECTED-STATUS JQ-FILTER "STATUS BODY"
@@ -108,6 +118,10 @@ r="$(wait_build "$id")"
 expect "the build is ready" 200 '.state == "ready" and (.functions | length) == 6 and (.graphs[0].sinks == [6])' "$r"
 expect "resubmitting returns the ready build" 200 ".id == \"$id\" and .state == \"ready\"" \
   "$(api POST /v0/builds "$(request "$commit" main "$functions" "$graphs")")"
+(cd "$work/lun/builds/$id/driver" && lake env lean "$here/RuntimeChecks.lean")
+pass "embedded runtime's typed boundary and address checks"
+expect "a missing policy cannot enable a legacy effect" 200 '.error | test("permission denied: Trace")' \
+  "$(api POST "/v0/builds/$id/functions/add" '{"input":[1,2],"binding":{"org_id":"org-1","user_id":"user-1"}}')"
 
 expect "a function, one input" 200 '.output == 42' "$(api POST "/v0/builds/$id/functions/math.double" '{"input": 21}')"
 expect "a function, several inputs, one bad" 200 '.outputs[0].output == 2 and (.outputs[1].error | test("decode")) and .outputs[2].output == 6' \
@@ -153,6 +167,59 @@ expect "several inputs at once" 200 '[.changed[] | .id] == [0, 1, 2, 3, 4, 5] an
 expect "a session of an unknown graph" 404 '.error | test("no graph")' \
   "$(api POST "/v0/builds/$id/graphs/nope/sessions" '{}')"
 
+# The caller's organization bounds reach the actual effect interpreter.
+expect "a denied effect is refused by the function interpreter" 200 '.error | test("permission denied: Trace")' \
+  "$(api POST "/v0/builds/$id/functions/add" '{"input":[1,2],"policy":{"effects":[],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-1"}}')"
+r="$(api POST "/v0/builds/$id/graphs/main/sessions" '{"inputs":{"x":5},"policy":{"effects":["Trace"],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-1"}}')"
+expect "a bound session runs through its permitted handlers" 201 '.nodes[6].output == "#31"' "$r"
+bound="$(jq -r .session <<<"${r#* }")"
+expect "a session binding cannot change on update" 403 '.error | test("binding cannot change")' \
+  "$(api POST "/v0/sessions/$bound" '{"inputs":{"x":6},"binding":{"org_id":"org-2","user_id":"user-1"}}')"
+expect "a denied binding update leaves the session untouched" 200 '.updates == 0 and .nodes[6].output == "#31"' \
+  "$(api GET "/v0/sessions/$bound")"
+expect "a session cannot widen its stored effect ceiling" 403 '.error | test("cannot widen")' \
+  "$(api POST "/v0/sessions/$bound" '{"inputs":{"x":6},"policy":{"effects":["Trace","HTTP"],"domains":[]}}')"
+
+# Native runtime: real Lean witnesses and interpreter, a credential-free broker
+# wire double, and actual filesystem syscalls (not a dry-run interpreter).
+scoped_functions='[
+  {"name":"report","module":"Fixture.Scoped","function":"Fixture.Scoped.report","signature":"List String → Eff [Control.Monad.Effect.Connector.Connector Fixture.Scoped.storage] Lean.Json"},
+  {"name":"files","module":"Fixture.Scoped","function":"Fixture.Scoped.writeRead","signature":"String → Eff [Control.Monad.Effect.FileSystem.FileSystem Fixture.Scoped.files] String"},
+  {"name":"read","module":"Fixture.Scoped","function":"Fixture.Scoped.readPath","signature":"List String → Eff [Control.Monad.Effect.FileSystem.FileSystem Fixture.Scoped.files] String"},
+  {"name":"fetch","module":"Fixture.Scoped","function":"Fixture.Scoped.fetch","signature":"Eff [Control.Monad.Effect.HTTP.HTTP Fixture.Scoped.http] Nat"},
+  {"name":"foreign","module":"Fixture.Scoped","function":"Fixture.Scoped.foreignSchema","signature":"Eff [Control.Monad.Effect.PostgreSQL.PostgreSQL Fixture.Scoped.compute] Nat"}
+]'
+r="$(api POST /v0/builds "$(request "$commit" main "$scoped_functions" '[]')")"
+scoped="$(jq -r .id <<<"${r#* }")"
+expect "native scoped functions compile with canonical runners" 200 '.state == "ready"' "$(wait_build "$scoped")"
+grant='{"provider":"s3","connection":"conn-1","scopes":[{"operation":"objects.read","root":["reports"],"descendants":true}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}'
+connector_request="$(jq -n --argjson cap "$grant" '{input:["reports","invoice.json"],policy:{effects:["Connector"],domains:[]},binding:{org_id:"org-1",user_id:"user-1"},connectors:{report:[{provider:"s3",connection:"conn-1",account:"user-1/conn-1",organization:$cap,connectionPermissions:$cap,cell:$cap,warrants:[{operation:"objects.read",cost:0,warrant:{id:"fixture",orgId:"org-1",tag:"ab01",caveats:[{kind:"expiresAt",value:"253402300799"},{kind:"capability",provider:"s3",action:"objects.read"},{kind:"resource",value:"conn-1"},{kind:"budget",value:"0"},{kind:"runId",value:"fixture"}]}}]}]}}')"
+connector_request="$(jq '.connectors.report[0].warrantPermissions = .connectors.report[0].cell' <<<"$connector_request")"
+expect "an authorized connector makes an exact URL-free broker roundtrip" 200 '.output.status == 200 and .output.body.resource == ["reports","invoice.json"]' \
+  "$(api POST "/v0/builds/$scoped/functions/report" "$connector_request")"
+for ceiling in organization connectionPermissions cell warrantPermissions; do
+  denied="$(jq --arg ceiling "$ceiling" '.connectors.report[0][$ceiling].scopes=[]' <<<"$connector_request")"
+  expect "the $ceiling ceiling independently denies the connector" 200 '.error | test("authority denied")' \
+    "$(api POST "/v0/builds/$scoped/functions/report" "$denied")"
+done
+denied="$(jq '.connectors.report[0].warrants=[]' <<<"$connector_request")"
+expect "a fresh operation warrant is required" 200 '.error | test("no warrant")' \
+  "$(api POST "/v0/builds/$scoped/functions/report" "$denied")"
+denied="$(jq '.connectors.report[0].account="other-user/another-connection"' <<<"$connector_request")"
+expect "connector account cannot leave its named connection binding" 200 '.error | test("bound organization/user")' \
+  "$(api POST "/v0/builds/$scoped/functions/report" "$denied")"
+file_request='{"input":"inside","policy":{"effects":["FileSystem"],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-1"}}'
+expect "temporary-file effects write and read beneath the bound user" 200 '.output=="inside"' \
+  "$(api POST "/v0/builds/$scoped/functions/files" "$file_request")"
+expect "temporary-file traversal is refused in the real interpreter" 200 '.error | test("relative path")' \
+  "$(api POST "/v0/builds/$scoped/functions/read" '{"input":["..","outside"],"policy":{"effects":["FileSystem"],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-1"}}')"
+expect "another user cannot read the first user temporary file" 200 '.error | test("temporary-file operation refused")' \
+  "$(api POST "/v0/builds/$scoped/functions/read" '{"input":["note.txt"],"policy":{"effects":["FileSystem"],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-2"}}')"
+expect "HTTP domain ceiling denies before opening a socket" 200 '.error | test("HTTP domain or port")' \
+  "$(api POST "/v0/builds/$scoped/functions/fetch" '{"policy":{"effects":["HTTP"],"domains":["other.org"]},"binding":{"org_id":"org-1","user_id":"user-1"}}')"
+expect "PostgreSQL cannot select another user schema" 200 '.error | test("bound user.*schema")' \
+  "$(api POST "/v0/builds/$scoped/functions/foreign" '{"policy":{"effects":["PostgreSQL"],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-1","schema":"org_1_user_1"}}')"
+
 r="$(curl -s -H 'Authorization: Bearer secret' "$base/v0/builds/$id/log")"
 grep -q "fetched file://" <<<"$r" || fail "the log: $r"; pass "the build log"
 
@@ -169,6 +236,47 @@ expect_failed "a commit that is not on the branch" "$(request "$unrelated" main 
 expect_failed "a signature mismatch is attributed to its function" \
   "$(request "$commit" main '[{"name": "bad", "module": "Fixture.Math", "function": "Fixture.double", "signature": "Int → Eff [] Nat"}]' '[]')" \
   '.state == "failed" and (.diagnostics[0] | .scope == "function" and .name == "bad" and (.message | test("mismatch")))'
+
+contract_functions='[
+  {"name":"double","module":"Fixture.Math","function":"Fixture.double","signature":"Nat → Eff [] Nat","outputType":"Nat"},
+  {"name":"render","module":"Fixture.Math","function":"Fixture.render","signature":"Nat → Eff [] String","outputType":"String"}
+]'
+contract_graphs='[{"name":"contract","program":"do\n  let x ← input \"x\" Nat\n  let d ← double x\n  render d","inputTypes":{"x":"Nat"},"dependencies":{"double":["x"],"render":["double"]}}]'
+r="$(api POST /v0/builds "$(request "$commit" main "$contract_functions" "$contract_graphs")")"
+contract="$(jq -r .id <<<"${r#* }")"
+expect "user output types and named dependencies type-check" 200 '.state == "ready"' "$(wait_build "$contract")"
+expect "the checked graph runs with its declared arguments" 200 '.nodes[2].output == "#10"' \
+  "$(api POST "/v0/builds/$contract/graphs/contract" '{"inputs":{"x":5}}')"
+expect "source JSON is decoded by its configured Lean type before execution" 400 '.error | test("configured type")' \
+  "$(api POST "/v0/builds/$contract/graphs/contract" '{"inputs":{"x":"wrong"}}')"
+bad_output="$(jq '.[0].outputType = "String"' <<<"$contract_functions")"
+expect_failed "a generated signature cannot override the user output type" \
+  "$(request "$commit" main "$bad_output" "$contract_graphs")" \
+  '.state == "failed" and (.diagnostics | any(.message | test("user-owned output constraint")))'
+bad_dependencies="$(jq '.[0].dependencies.render = ["x"]' <<<"$contract_graphs")"
+expect_failed "a generated graph cannot override named dependencies" \
+  "$(request "$commit" main "$contract_functions" "$bad_dependencies")" \
+   '.state == "failed" and (.diagnostics | any(.message | test("declared inputs")))'
+bad_inputs="$(jq '.[0].inputTypes.x = "String"' <<<"$contract_graphs")"
+expect_failed "a generated graph cannot override a user input source type" \
+  "$(request "$commit" main "$contract_functions" "$bad_inputs")" \
+  '.state == "failed" and (.diagnostics | any(.message | test("String|type equality|default value")))'
+bypass_inputs="$(jq '.[0].program |= sub("input "; "LunDriver.Dsl.input ")' <<<"$contract_graphs")"
+expect_failed "a graph cannot bypass its typed source constructor" \
+  "$(request "$commit" main "$contract_functions" "$bypass_inputs")" \
+  '.state == "failed" and (.diagnostics | any(.message | test("checked input constructor")))'
+raw_subject='[{"name":"contract","program":"do\n  let x ← Subject.toObservable <$> Reactive.label (LunDriver.inputLabel \"x\") (subject Nat)\n  double x","inputTypes":{"x":"Nat"}}]'
+expect_failed "a labelled raw subject cannot masquerade as a checked source" \
+  "$(request "$commit" main "$contract_functions" "$raw_subject")" \
+  '.state == "failed" and (.diagnostics | any(.message | test("Reactive.subject")))'
+forged_observable='[{"name":"contract","program":"do\n  let x ← input \"x\" Nat\n  let forged : Observable Nat := ⟨x.id⟩\n  double forged","inputTypes":{"x":"Nat"}}]'
+expect_failed "a graph cannot forge a typed observable around a node index" \
+  "$(request "$commit" main "$contract_functions" "$forged_observable")" \
+  '.state == "failed" and (.diagnostics | any(.message | test("constructor|private|Observable")))'
+missing_input="$(jq '.[0].inputTypes.undeclared = "Nat"' <<<"$contract_graphs")"
+expect_failed "a graph cannot silently omit a configured typed source" \
+  "$(request "$commit" main "$contract_functions" "$missing_input")" \
+  '.state == "failed" and (.diagnostics | any(.message | test("configured input.*exactly once")))'
 expect_failed "ambient IO is not a function" \
   "$(request "$commit" main '[{"name": "io", "module": "Fixture.Rejected", "function": "Fixture.Rejected.ambient", "signature": "Nat → IO Nat"}]' '[]')" \
   '.state == "failed" and (.diagnostics[0].message | test("must return `Eff"))'
@@ -178,6 +286,21 @@ expect_failed "a project's own effect is not allowed" \
 expect_failed "sorry is refused" \
   "$(request "$commit" main '[{"name": "u", "module": "Fixture.Rejected", "function": "Fixture.Rejected.unfinished", "signature": "Nat → Eff [] Nat"}]' '[]')" \
   '.state == "failed" and (.diagnostics[0].message | test("sorry"))'
+expect_failed "transitive implemented_by cannot hide an unsafe runtime" \
+  "$(request "$commit" main '[{"name":"bad","module":"Fixture.Rejected","function":"Fixture.Rejected.indirectReplacement","signature":"Nat → Eff [] Nat"}]' '[]')" \
+  '.state == "failed" and (.diagnostics | any(.message | test("implemented_by")))'
+expect_failed "a project cannot forge capability evidence with an axiom" \
+  "$(request "$commit" main '[{"name":"bad","module":"Fixture.Rejected","function":"Fixture.Rejected.forged","signature":"Nat → Eff [] Nat"}]' '[]')" \
+  '.state == "failed" and (.diagnostics | any(.message | test("axiom")))'
+expect_failed "a project cannot replace the canonical FunctionType runner" \
+  "$(request "$commit" main '[{"name":"bad","module":"Fixture.EvilRunner","function":"Fixture.EvilRunner.value","signature":"Eff [] Nat"}]' '[]')" \
+  '.state == "failed" and (.diagnostics | any(.message | test("handler|runner|own handlers")))'
+expect_failed "the JSON serialization dictionary is audited transitively" \
+  "$(request "$commit" main '[{"name":"bad","module":"Fixture.EvilCodec","function":"Fixture.EvilCodec.output","signature":"Eff [] Fixture.EvilCodec.Token"}]' '[]')" \
+  '.state == "failed" and (.diagnostics | any(.message | test("implemented_by|extern|unsafe")))'
+expect_failed "an unrelated project initializer cannot execute in a served driver" \
+  "$(request "$commit" main '[{"name":"bad","module":"Fixture.EvilInit","function":"Fixture.EvilInit.output","signature":"Eff [] Nat"}]' '[]')" \
+  '.state == "failed" and (.diagnostics | any(.message | test("initializer")))'
 expect_failed "an ill-typed graph is attributed to its line in the program" \
   "$(request "$commit" main "$functions" '[{"name": "bad", "program": "do\n  let p ← input \"p\" Fixture.Point\n  math.double p"}]')" \
   '.state == "failed" and (.diagnostics[0] | .scope == "graph" and .name == "bad" and .line == 3)'

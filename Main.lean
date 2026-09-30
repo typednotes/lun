@@ -31,6 +31,9 @@ def main : IO Unit := do
     | some s => pure s
     | none => Data.Hex.encode <$> Crypto.SecureRandom.randomBytes 32
   let allowLocal := (← IO.getEnv "LUN_ALLOW_LOCAL") == some "1"
+  let liaisonSdkPath ← if allowLocal then do
+    pure ((← IO.getEnv "LUN_LIAISON_SDK_PATH").map System.FilePath.mk)
+    else pure none
   let cfg : Lun.Config :=
     { workdir := workdir
       liaisonUrl := ← IO.getEnv "LUN_LIAISON_URL"
@@ -40,6 +43,7 @@ def main : IO Unit := do
       callTimeoutMs := ← secondsEnv "LUN_CALL_TIMEOUT" 60
       packageCache := (← IO.getEnv "LUN_PACKAGE_CACHE").map System.FilePath.mk
       allowLocal
+      liaisonSdkPath
       salt }
   let builder ← Lun.Builder.new cfg
   builder.recover

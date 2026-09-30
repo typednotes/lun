@@ -39,6 +39,13 @@ namespace Lun
 
 open Lean (Json)
 
+/-- Parse request text before a map-backed JSON representation can erase
+    duplicate authorization fields. The original bytes are checked first. -/
+def parseRequestJson (text : String) : Except String Json := do
+  let value ← Data.Json.Decode.decode text
+  unless Liaison.Wire.uniqueKeys value do throw "duplicate JSON fields"
+  Json.parse text
+
 -- ── Types ───────────────────────────────────────────────────────────────────
 
 /-- Credentials for a private repository: a warrant for the connection, and
@@ -64,12 +71,18 @@ structure FunctionSpec where
   module : String
   function : String
   signature : String
+  /-- A user-owned output constraint, independent of the generated signature. -/
+  outputType : Option String := none
   deriving DecidableEq, Repr, Inhabited
 
 /-- A graph: a `Reactive` program over the functions. -/
 structure GraphSpec where
   name : String
   program : String
+  /-- Named direct arguments, in order; omitted for legacy graphs. -/
+  dependencies : List (String × List String) := []
+  /-- User-owned source types (UI/endpoint inputs have no function signature). -/
+  inputTypes : List (String × String) := []
   deriving DecidableEq, Repr, Inhabited
 
 /-- A validated build request. -/
@@ -149,7 +162,13 @@ private def parseFunction (j : Json) (i : Nat) : Except String FunctionSpec := d
   let signature ← string j ctx "signature"
   check (Validate.leanText signature (multiline := false) (maxLen := 4096))
     s!"{ctx}.signature: must be one line of Lean"
-  return { name, module, function, signature }
+  let outputType ← match optional j "outputType" with
+    | none => pure none
+    | some (.str t) =>
+      check (Validate.leanText t (multiline := false) (maxLen := 512)) s!"{ctx}.outputType: must be one Lean type"
+      pure (some t)
+    | some _ => throw s!"{ctx}.outputType: must be a string"
+  return { name, module, function, signature, outputType }
 
 private def parseGraph (j : Json) (i : Nat) : Except String GraphSpec := do
   let ctx := s!"graphs[{i}]"
@@ -157,7 +176,27 @@ private def parseGraph (j : Json) (i : Nat) : Except String GraphSpec := do
   check (Validate.functionName name) s!"{ctx}.name: must be dotted identifiers"
   let program ← string j ctx "program"
   check (Validate.leanText program (multiline := true)) s!"{ctx}.program: must be Lean text"
-  return { name, program }
+  let dependencies ← match optional j "dependencies" with
+    | none => pure []
+    | some (.obj values) => values.toList.mapM fun (cell, deps) => do
+      check (Validate.functionName cell) s!"{ctx}.dependencies: invalid cell name"
+      let names ← deps.getArr?
+      let names ← names.toList.mapM fun value => do
+        let value ← value.getStr?
+        check (Validate.functionName value) s!"{ctx}.dependencies: invalid argument name"
+        pure value
+      pure (cell, names)
+    | some _ => throw s!"{ctx}.dependencies: must be an object"
+  let inputTypes ← match optional j "inputTypes" with
+    | none => pure []
+    | some (.obj values) => values.toList.mapM fun (input, value) => do
+      check (Validate.functionName input) s!"{ctx}.inputTypes: invalid input name"
+       let type ← value.getStr? |>.mapError (fun _ => s!"{ctx}.inputTypes: each type must be a string")
+      check (Validate.leanText type (multiline := false) (maxLen := 512))
+        s!"{ctx}.inputTypes: must contain Lean types"
+      pure (input, type)
+    | some _ => throw s!"{ctx}.inputTypes: must be an object"
+  return { name, program, dependencies, inputTypes }
 
 /-- The first element occurring twice, if any. -/
 def firstDuplicate : List String → Option String
@@ -193,10 +232,11 @@ def BuildSpec.canonical (s : BuildSpec) : Json :=
         [ ("url", s.source.repo.cloneUrl), ("branch", s.source.branch)
         , ("commit", s.source.commit), ("path", s.source.path) ])
     , ("open", Json.arr (s.opens.map Json.str).toArray)
-    , ("functions", Json.arr (s.functions.map fun c => Json.mkObj
-        [ ("name", c.name), ("module", c.module), ("function", c.function)
-        , ("signature", c.signature) ]).toArray)
+    , ("functions", Json.arr (s.functions.map fun c => Json.mkObj <|
+        [ ("name", Json.str c.name), ("module", Json.str c.module), ("function", Json.str c.function)
+         , ("signature", Json.str c.signature) ] ++ (c.outputType.map fun t => [("outputType", Json.str t)]).getD []).toArray)
     , ("graphs", Json.arr (s.graphs.map fun d => Json.mkObj
-        [("name", d.name), ("program", d.program)]).toArray) ]
+          [("name", d.name), ("program", d.program), ("dependencies", Json.mkObj (d.dependencies.map fun (n, args) => (n, Lean.toJson args))),
+           ("inputTypes", Json.mkObj (d.inputTypes.map fun (n, t) => (n, Json.str t)))]).toArray) ]
 
 end Lun

@@ -104,4 +104,10 @@ def creds (w : Json) (account : String := "user-1/conn-1") : Json :=
 #guard firstDuplicate ["a", "b", "a"] == some "a"
 #guard firstDuplicate ["a", "b"] == none
 
+def constrainedGraph : Json := Json.mkObj [("name", "main"), ("program", "pure ()"),
+  ("inputTypes", Json.mkObj [("x", "List Nat")]), ("dependencies", Json.mkObj [("math.double", Json.arr #["x"])])]
+#guard (BuildSpec.parse (request (graphs := [constrainedGraph]))).toOption.map (·.graphs.head!.inputTypes) == some [("x", "List Nat")]
+#guard mentions (request (graphs := [constrainedGraph.setObjVal! "inputTypes" (Json.mkObj [("x", 5)])])) "string"
+#guard mentions (request (graphs := [constrainedGraph.setObjVal! "inputTypes" (Json.mkObj [("x", "Nat\nString")])])) "Lean types"
+
 end LunTests.Spec

@@ -33,7 +33,7 @@ def maxBodyBytes : Nat := 16 * 1024 * 1024
 /-- The statuses lun answers with. -/
 def statusOf : Nat → Network.HTTP.Types.Status
   | 200 => status200 | 201 => status201 | 202 => status202 | 400 => status400 | 401 => status401
-  | 404 => status404 | 409 => status409 | 502 => status502 | 504 => status504
+  | 403 => status403 | 404 => status404 | 409 => status409 | 502 => status502 | 504 => status504
   | _ => status500
 
 private def json (code : Nat) (body : Json) : Network.WebApp.Response :=
@@ -64,7 +64,7 @@ def authorized (cfg : Config) (req : Network.WebApp.Request) : Bool :=
 
 private def submit (b : Builder) (req : Network.WebApp.Request) : IO Network.WebApp.Response := do
   let some text ← readBody req | return error 400 "the request body is too large or not UTF-8"
-  let j ← match Json.parse text with
+  let j ← match parseRequestJson text with
     | .ok j => pure j
     | .error e => return error 400 s!"the request is not JSON: {e}"
   match BuildSpec.parse j b.cfg.allowLocal with

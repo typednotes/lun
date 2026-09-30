@@ -66,7 +66,15 @@ structure Config where
   packageCache : Option FilePath := none
   /-- Local mode: `file://` repositories and path dependencies (tests only). -/
   allowLocal : Bool := false
+  /-- Local contract tests can consume an unpublished broker SDK checkout. -/
+  liaisonSdkPath : Option FilePath := none
   salt : String
+
+/-- Build and driver processes do not inherit service credentials. Runtime
+    receives only its server-owned private stdin context after compilation. -/
+def credentialFreeEnv : Array (String × Option String) :=
+  #["SECRETS_USERNAME", "SECRETS_PASSWORD", "SECRETS_TOKEN", "LUN_TOKEN", "LUN_WARRANT_KEY",
+    "COMPUTE_DB_URL", "DATABASE_URL"].map fun name => (name, none)
 
 -- ── Statuses ────────────────────────────────────────────────────────────────
 
@@ -103,7 +111,8 @@ instance : ToJson Status where
     (s.error.map fun e => [("error", toJson e)]).getD [] ++
     (match s.description with
      | some d => [("functions", (d.getObjVal? "functions").toOption.getD (Json.arr #[])),
-                  ("graphs", (d.getObjVal? "graphs").toOption.getD (Json.arr #[]))]
+                  ("graphs", (d.getObjVal? "graphs").toOption.getD (Json.arr #[])),
+                  ("runtimeContract", (d.getObjVal? "runtimeContract").toOption.getD Json.null)]
      | none => [])
 
 /-- Read a status back from its JSON. -/
@@ -114,7 +123,8 @@ def Status.ofJson (j : Json) : Except String Status := do
   let error := (j.getObjValAs? String "error").toOption
   let diagnostics := (j.getObjValAs? (Array Json) "diagnostics").toOption.getD #[]
   let description := match j.getObjVal? "functions", j.getObjVal? "graphs" with
-    | .ok c, .ok d => some (Json.mkObj [("functions", c), ("graphs", d)])
+    | .ok c, .ok d => some (Json.mkObj ([("functions", c), ("graphs", d)] ++
+        (((j.getObjValAs? String "runtimeContract").toOption.map fun version => [("runtimeContract", Json.str version)]).getD [])))
     | _, _ => none
   return { id, state, source, error, diagnostics, description }
 
@@ -254,16 +264,28 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
   set { status with state := .building }
   let driver := driverDir cfg id
   if ← driver.pathExists then IO.FS.removeDirAll driver
+  let pq ← System.Process.run "pkg-config" #["--libs", "libpq"] 30000 (env := credentialFreeEnv)
+  unless pq.ok do throw (IO.userError "driver requires libpq development files (pkg-config --libs libpq)")
+  let flags := (pq.stdout.trimAscii.toString.splitOn " ").filter (!·.isEmpty)
+  -- A Linux -L<multiarch> shadows Lean's bundled glibc startup libraries.
+  -- Name libpq outright, as Linen's executable-safe native recipe does.
+  let nativeLinkArgs ← if System.Platform.isOSX then pure flags else do
+    let directory ← System.Process.run "pkg-config" #["--variable=libdir", "libpq"] 30000 (env := credentialFreeEnv)
+    unless directory.ok && !directory.stdout.trimAscii.isEmpty do throw (IO.userError "cannot locate libpq for the driver link")
+    let library : FilePath := (FilePath.mk directory.stdout.trimAscii.toString) / "libpq.so"
+    unless ← library.pathExists do throw (IO.userError "libpq shared library is unavailable for the driver link")
+    pure ((flags.filter (!·.startsWith "-L")).map fun flag => if flag == "-lpq" then library.toString else flag)
   let files := Driver.files
     { spec, projectDir := ← IO.FS.realPath p.project, packageName := p.manifest.name
-      toolchain := p.toolchain }
+      toolchain := p.toolchain, liaisonSdkPath := cfg.liaisonSdkPath, nativeLinkArgs
+      linenSource := p.manifest.packages.findSome? (fun package => if package.name == "linen" then some package.source else none) }
   for (path, contents) in files do
     let file := driver / path
     if let some dir := file.parent then IO.FS.createDirAll dir
     IO.FS.writeFile file contents
   seedCache b id p.manifest
   -- 4. build. Lake clones the project's dependencies (linen) with git.
-  let r ← System.Process.run "lake" #["build"] cfg.buildTimeoutMs (cwd := driver) (env := System.Process.hermeticGit)
+  let r ← System.Process.run "lake" #["build"] cfg.buildTimeoutMs (cwd := driver) (env := System.Process.hermeticGit ++ credentialFreeEnv)
   appendLog cfg id r.stdout
   appendLog cfg id r.stderr
   unless r.ok do
@@ -277,7 +299,7 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
           error := some error }
     return
   -- 5. describe
-  let d ← System.Process.run (driverExe cfg id).toString #["describe"] cfg.callTimeoutMs
+  let d ← System.Process.run (driverExe cfg id).toString #["describe"] cfg.callTimeoutMs (env := credentialFreeEnv)
   unless d.ok do throw (IO.userError (d.describe "lun-driver describe"))
   let description ← IO.ofExcept (Json.parse d.stdout |>.mapError IO.userError)
   let warnings := (Diagnostics.parse r.stdout).filter reportable
@@ -314,7 +336,9 @@ def Builder.submit (b : Builder) (spec : BuildSpec) : IO Status := do
   if (← b.running.get).contains id then
     if let some s := existing then return s
   if let some s := existing then
-    if s.state == .ready then return s
+    if s.state == .ready &&
+        (s.description.bind (fun d => (d.getObjValAs? String "runtimeContract").toOption)) == some Driver.runtimeContract then
+      return s
   IO.FS.createDirAll (buildDir b.cfg id)
   IO.FS.writeFile (buildDir b.cfg id / "spec.json") spec.canonical.pretty
   let status : Status := { id, state := .queued, source := (spec.canonical.getObjVal? "source").toOption.getD Json.null }
@@ -333,6 +357,16 @@ structure Answer where
 private def errorAnswer (status : Nat) (msg : String) : Answer :=
   { status, body := Json.mkObj [("error", toJson msg)] }
 
+/-- A ready artifact must attest the bounded runtime protocol before execution.
+    Missing/old markers refuse cached legacy executables, not just new builds. -/
+structure BoundedRuntime (status : Status) : Type where
+  private mk ::
+  current : (status.description.bind (fun d => (d.getObjValAs? String "runtimeContract").toOption)) = some Driver.runtimeContract
+
+def BoundedRuntime.check? (status : Status) : Option (BoundedRuntime status) :=
+  if h : (status.description.bind (fun d => (d.getObjValAs? String "runtimeContract").toOption)) = some Driver.runtimeContract then
+    some ⟨h⟩ else none
+
 /-- Call a function (`kind = "function"`), a graph (`kind = "graph"`) or a session of a
     graph (`kind = "session-start"`/`"session-update"`, `Lun.Session`) of a
     ready build with a JSON request body. The driver's traces (stderr) come
@@ -341,12 +375,25 @@ def Builder.call (b : Builder) (id kind name : String) (request : String) : IO A
   let some s ← readStatus b.cfg id | return errorAnswer 404 "no such build"
   unless s.state == .ready do
     return errorAnswer 409 s!"the build is {s.state.toString}, not ready"
+  let some _bounded := BoundedRuntime.check? s
+    | return errorAnswer 409 "this build uses an older runtime; rebuild it before executing"
   let listed := s.description.bind fun d =>
     (d.getObjValAs? (Array Json) (if kind == "function" then "functions" else "graphs")).toOption.map fun xs =>
       xs.any fun x => (x.getObjValAs? String "name").toOption == some name
   unless listed == some true do
     return errorAnswer 404 s!"the build has no {if kind == "function" then "function" else "graph"} named '{name}'"
-  let r ← System.Process.run (driverExe b.cfg id).toString #[kind, name] b.cfg.callTimeoutMs (input := request)
+  let req ← match parseRequestJson (if request.trimAscii.isEmpty then "{}" else request) with
+    | .ok (.obj fields) => pure (Json.obj fields)
+    | _ => return errorAnswer 400 "the request must be a JSON object"
+  -- Private context is service-owned, replaces any caller-supplied value, and
+  -- travels only over this child's stdin. It never enters a spec or session.
+  let mut protectedFields : List (String × Json) := []
+  for name in ["SECRETS_HOST", "SECRETS_PORT", "SECRETS_INSECURE", "SECRETS_USERNAME", "SECRETS_PASSWORD", "SECRETS_TOKEN", "LUN_TEMP_ROOT"] do
+    if let some value ← IO.getEnv name then protectedFields := (name, Json.str value) :: protectedFields
+  let req := (req.setObjVal! "_runtime" (Json.mkObj protectedFields)).setObjVal! "liaisonUrl"
+    (b.cfg.liaisonUrl.map Json.str |>.getD Json.null)
+  let r ← System.Process.run (driverExe b.cfg id).toString #[kind, name] b.cfg.callTimeoutMs
+    (env := credentialFreeEnv ++ protectedFields.toArray.map fun (name, _) => (name, none)) (input := req.compress)
   let status := match r.exitCode with
     | some 0 => 200 | some 1 => 400 | none => 504 | some _ => 502
   if status == 504 then return errorAnswer 504 s!"the {kind} did not answer within the time limit"

@@ -8,6 +8,14 @@ open Lun.Fetch
 
 namespace LunTests.Fetch
 
+def nativeEntry (path mode : String) := Lean.Json.mkObj [("path", Lean.Json.str path), ("mode", Lean.Json.str mode)]
+#guard (NativeFile.ofJson (nativeEntry "src/Main.lean" "100644")).toOption.isSome
+#guard (NativeFile.ofJson (nativeEntry "bin/run" "100755")).toOption.isSome
+#guard ["../outside", "src/../outside", "/outside", "a%2Fb", ".git/config", ".GIT/config", ".LaKe/cache"].all
+  (fun path => (NativeFile.ofJson (nativeEntry path "100644")).toOption.isNone)
+#guard (NativeFile.ofJson (nativeEntry "link" "120000")).toOption.isNone
+#guard (NativeFile.ofJson (nativeEntry "submodule" "160000")).toOption.isNone
+
 #guard percentEncode "abc-._~XYZ09" == "abc-._~XYZ09"
 #guard percentEncode "a/b c" == "a%2Fb%20c"
 #guard percentEncode "é" == "%C3%A9"

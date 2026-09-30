@@ -22,11 +22,17 @@
   runtime parses as exactly one term each.
 -/
 import Lun.Spec
+import Lun.Manifest
 
 namespace Lun.Driver
 
 /-- The runtime every driver shares, embedded in lun at compile time. -/
 def runtimeSource : String := include_str "../template/LunDriver/Runtime.lean"
+
+def temporarySource : String := include_str "../template/LunDriver/temporary.py"
+
+/-- Cached drivers from before bounded execution must never receive calls. -/
+def runtimeContract : String := "bounded-eff-v1"
 
 /-- What a driver is generated from. -/
 structure Input where
@@ -37,6 +43,10 @@ structure Input where
   packageName : String
   /-- The user project's `lean-toolchain`. -/
   toolchain : String
+  liaisonSdkPath : Option System.FilePath := none
+  linenSource : Option Manifest.Source := none
+  /-- Native driver bindings require libpq even when lun itself does not. -/
+  nativeLinkArgs : List String := ["-lpq"]
 
 -- ── Lean text ───────────────────────────────────────────────────────────────
 
@@ -85,19 +95,27 @@ private def opensLine (opens : List String) : String :=
 def functionSource (opens : List String) (c : FunctionSpec) : String :=
   s!"import LunDriver.Runtime\nimport {ident c.module}\n" ++
   "open Control.Monad.Effect\n" ++ opensLine opens ++
-  s!"lun_function {strLit c.name} := {ident c.function} : {rawString c.signature}\n"
+  s!"lun_function {strLit c.name} := {ident c.function} : {rawString c.signature}\n" ++
+  (c.outputType.map fun t => s!"lun_output {strLit c.name} : {rawString t}\n").getD ""
 
 /-- The line of a graph module on which its program starts (1-based), and the
     column its first line starts at. -/
 def graphProgramStart (opens : List String) (d : GraphSpec) : Nat × Nat :=
-  (if opens.isEmpty then 3 else 4,
-   s!"lun_graph {strLit d.name} := ".length + rawStringPrefixLength d.program)
+  ((if opens.isEmpty then 3 else 4) + (if d.inputTypes.isEmpty then 0 else 2),
+   (s!"lun_graph {strLit d.name}" ++ (if d.inputTypes.isEmpty then "" else s!" using_input LunDriver.Inputs.{ident d.name}.input") ++ " := ").length + rawStringPrefixLength d.program)
 
 /-- The module for graph `d`. -/
 def graphSource (opens : List String) (d : GraphSpec) : String :=
   "import LunDriver.Functions\n" ++
-  "open Control.Reactive LunDriver.Dsl LunDriver.Functions\n" ++ opensLine opens ++
-  s!"lun_graph {strLit d.name} := {rawString d.program}\n"
+  (if d.inputTypes.isEmpty then "open Control.Reactive LunDriver.Dsl LunDriver.Functions\n"
+   else "open Control.Reactive LunDriver.Functions\n") ++ opensLine opens ++
+   (if d.inputTypes.isEmpty then "" else
+     s!"lun_inputs {strLit d.name} := {rawString (Lean.toJson d.inputTypes).compress}\nopen LunDriver.Inputs.{ident d.name}\n") ++
+   s!"lun_graph {strLit d.name}" ++
+   (if d.inputTypes.isEmpty then "" else s!" using_input LunDriver.Inputs.{ident d.name}.input") ++
+   s!" := {rawString d.program}\n" ++
+  (if d.dependencies.isEmpty then "" else
+    s!"lun_dependencies {strLit d.name} := {rawString (Lean.toJson d.dependencies).compress}\n")
 
 /-- The list of all functions, which the graph checks and the executable use. -/
 def functionsSource (spec : BuildSpec) : String :=
@@ -109,7 +127,9 @@ def functionsSource (spec : BuildSpec) : String :=
 /-- The executable. -/
 def mainSource (spec : BuildSpec) : String :=
   let imports := (List.range spec.graphs.length).map fun j => s!"import {graphModule j}\n"
-  let graphs := spec.graphs.map fun d => s!"({strLit d.name}, LunDriver.Graphs.{ident d.name})"
+  let graphs := spec.graphs.map fun d =>
+    let graphNamespace := if !d.dependencies.isEmpty then "ConstrainedGraphs" else if !d.inputTypes.isEmpty then "SourceConstrainedGraphs" else "Graphs"
+    s!"({strLit d.name}, LunDriver.{graphNamespace}.{ident d.name})"
   "import LunDriver.Functions\n" ++ String.join imports ++
   s!"\ndef main (args : List String) : IO UInt32 :=\n" ++
   s!"  LunDriver.driverMain LunDriver.functionImpls [{", ".intercalate graphs}] args\n"
@@ -118,16 +138,28 @@ def mainSource (spec : BuildSpec) : String :=
 def lakefileSource (d : Input) : String :=
   s!"name = \"lun_driver\"\n" ++
   s!"defaultTargets = [\"lun-driver\"]\n\n" ++
+  (match d.linenSource with
+    | some (.path path) =>
+      let path : System.FilePath := path
+      let path := if path.isAbsolute then path else d.projectDir / path
+      s!"[[require]]\nname = \"linen\"\npath = {path.toString.quote}\n\n"
+    | some (.git url rev _) => s!"[[require]]\nname = \"linen\"\ngit = {url.quote}\nrev = {rev.quote}\n\n"
+    | none => "") ++
   s!"[[require]]\nname = {d.packageName.quote}\npath = {d.projectDir.toString.quote}\n\n" ++
+  (match d.liaisonSdkPath with
+    | some path => s!"[[require]]\nname = \"liaison\"\npath = {path.toString.quote}\n\n"
+    | none => "[[require]]\nname = \"liaison\"\ngit = \"https://github.com/typednotes/liaison\"\nrev = \"v0.6.0\"\n\n") ++
   s!"[[lean_lib]]\nname = \"LunDriver\"\n\n" ++
-  s!"[[lean_exe]]\nname = \"lun-driver\"\nroot = \"LunDriver.Main\"\n"
+  s!"[[lean_exe]]\nname = \"lun-driver\"\nroot = \"LunDriver.Main\"\n" ++
+  s!"moreLinkArgs = [{", ".intercalate (d.nativeLinkArgs.map String.quote)}]\n"
 
 /-- Every file of the driver: `(path relative to the driver, contents)`. -/
 def files (d : Input) : List (String × String) :=
   let spec := d.spec
   [ ("lakefile.toml", lakefileSource d)
   , ("lean-toolchain", d.toolchain)
-  , ("LunDriver/Runtime.lean", runtimeSource)
+   , ("LunDriver/Runtime.lean", runtimeSource)
+   , ("LunDriver/temporary.py", temporarySource)
   , ("LunDriver/Functions.lean", functionsSource spec)
   , ("LunDriver/Main.lean", mainSource spec) ] ++
   spec.functions.zipIdx.map (fun (c, i) => (moduleFile (functionModule i), functionSource spec.opens c)) ++

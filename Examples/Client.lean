@@ -208,9 +208,17 @@ def main (args : List String) : IO UInt32 := do
     return 1
   IO.println s!"ready: build {id.take 12}…\n"
 
-  -- 2. Register the graph as a session, with its first inputs.
+  -- 2. The trusted caller grants only the example's Trace/Error effects and
+  --    binds the session identity. Generated functions cannot supply authority.
+  let execution := [
+    ("policy", Json.mkObj [("effects", toJson (["Trace", "Error"] : List String)),
+                          ("domains", toJson ([] : List String))]),
+    ("binding", Json.mkObj [("org_id", toJson "example-org"),
+                           ("user_id", toJson "example-user"),
+                           ("graph_id", toJson "invoice")])]
+  -- Register the graph as a session, with its first inputs.
   let s ← lun.expect [201] .POST s!"/v0/builds/{id}/graphs/invoice/sessions"
-    (Json.mkObj [("inputs", start)])
+    (Json.mkObj (("inputs", start) :: execution))
   let session := (s.getObjValAs? String "session").toOption.getD ""
   let mut nodes := (s.getObjValAs? (Array Json) "nodes").toOption.getD #[]
   IO.println s!"▸ start {start.compress}"
@@ -220,7 +228,8 @@ def main (args : List String) : IO UInt32 := do
   -- 3. Update inputs, one change at a time: only what changed comes back.
   let mut lastChanged : List Nat := []
   for (what, inputs) in updates do
-    let u ← lun.expect [200] .POST s!"/v0/sessions/{session}" (Json.mkObj [("inputs", inputs)])
+    let u ← lun.expect [200] .POST s!"/v0/sessions/{session}"
+      (Json.mkObj (("inputs", inputs) :: execution))
     nodes := (u.getObjValAs? (Array Json) "nodes").toOption.getD nodes
     let changed := (u.getObjValAs? (Array Json) "changed").toOption.getD #[]
     lastChanged := changed.toList.filterMap fun n => (n.getObjValAs? Nat "id").toOption

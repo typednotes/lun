@@ -41,7 +41,7 @@ def spec : BuildSpec :=
 def input : Input := { spec, projectDir := "/work/src", packageName := "proj", toolchain := "leanprover/lean4:v4.34.0\n" }
 
 #guard (files input).map (·.1) ==
-  [ "lakefile.toml", "lean-toolchain", "LunDriver/Runtime.lean", "LunDriver/Functions.lean"
+  [ "lakefile.toml", "lean-toolchain", "LunDriver/Runtime.lean", "LunDriver/temporary.py", "LunDriver/Functions.lean"
   , "LunDriver/Main.lean", "LunDriver/Functions/F0.lean", "LunDriver/Functions/F1.lean", "LunDriver/Graphs/G0.lean" ]
 
 #guard functionSource [] spec.functions[0]! ==
@@ -69,5 +69,12 @@ def input : Input := { spec, projectDir := "/work/src", packageName := "proj", t
 -- The runtime is embedded.
 #guard has runtimeSource "elab \"lun_function \""
 #guard has runtimeSource "elab \"lun_graph \""
+#guard has runtimeSource ("def runtimeContract : String := " ++ runtimeContract.quote)
+
+def constrained : GraphSpec := { spec.graphs[0]! with inputTypes := [("x", "Nat")], dependencies := [("math.double", ["x"])] }
+#guard has (graphSource [] constrained) "lun_inputs"
+#guard has (graphSource [] constrained) "using_input LunDriver.Inputs."
+#guard has (graphSource [] constrained) "lun_dependencies"
+#guard (graphProgramStart [] constrained).1 == 5
 
 end LunTests.Driver

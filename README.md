@@ -14,7 +14,7 @@
   <a href="https://github.com/typednotes/lun/pkgs/container/lun"><img src="https://img.shields.io/badge/ghcr.io-typednotes%2Flun-blue?logo=docker" alt="Docker image"></a>
   <a href="https://github.com/typednotes/lun/tags"><img src="https://img.shields.io/github/v/tag/typednotes/lun?label=version&sort=semver" alt="Version"></a>
   <a href="https://lean-lang.org/"><img src="https://img.shields.io/badge/Lean-v4.34.0-blue" alt="Lean v4.34.0"></a>
-  <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v1.9.2-c9b896" alt="Built on linen v1.9.2"></a>
+   <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v1.10.0-c9b896" alt="Built on linen v1.10.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 </p>
 
@@ -29,6 +29,10 @@ serves it over HTTP: each function on its own, each graph at once, or as a
 live **session** whose inputs you update one at a time — only what depends on
 them runs again, and only what changed comes back.
 
+This documentation describes the coordinated **Lun 0.3.0 / Lode 0.3.0 /
+Typednotes 0.6.0 / Linen 1.10.0 / Liaison 0.6.0** release. Package pins,
+runtime/image defaults use this set; local release tags still require publication.
+
 <p align="center">
   <img src="docs/invoice.svg" alt="The invoice graph of the example, after its country input changed: shipping, vat, total and euros changed, subtotal and discounted did not run" width="760">
 </p>
@@ -36,9 +40,9 @@ them runs again, and only what changed comes back.
 <p align="center"><sub>The example's <code>invoice</code> graph after <code>{"country": "DE"}</code>, drawn with Graphviz by <code>lake exe lun-example --dot</code>.</sub></p>
 
 The projects it runs are the ones [`lode`](https://github.com/typednotes/lode),
-the agent, writes; private repositories are fetched through
-[`liaison`](https://github.com/typednotes/liaison), so lun never holds a
-credential.
+the agent, writes; private repositories and outbound connector credentials are
+handled through [`liaison`](https://github.com/typednotes/liaison). Bound local
+compute and graph-vault effects use lun's private service identity.
 
 ## Table of contents
 
@@ -57,8 +61,13 @@ credential.
 
 - **Typed functions** — a function of the project is served only if it *is*
   a function of its declared signature `α₁ → … → αₙ → Eff effs β`, with JSON
-  arguments and result, whose effects are linen's vetted `Trace`, `Error`,
-  `HTTP` and `FileSystem`, run by linen's own handlers.
+  arguments and result, whose effects use canonical bounded runtime handlers:
+  `Trace`, `Error`, `HTTP`, `FileSystem`, `Connector`, `PostgreSQL`, `SecretStore`
+  and `ObjectStore`.
+- **Notebook authority** — caller-owned output/source types, four-ceiling
+  connector scopes, immutable session bindings, schema-confined compute and
+  descriptor-relative temporary files. See [runtime guarantees](docs/runtime-guarantees.md)
+  for proofs, integration metadata, supported operations and trusted boundaries.
 - **Reactive graphs** — written in linen's `Reactive` monad, where each
   function applies to observables; wiring a function to a value of the wrong
   type does not compile, and a graph may only apply the declared functions.
@@ -71,15 +80,19 @@ credential.
   skipped, and the rest of the graph carries on.
 - **Diagnostics where they belong** — every build message is attributed to
   the function, the graph (with its line in the program) or the project.
-- **No credentials** — private GitHub and GitLab repositories are read
-  through liaison, with a warrant the typednotes app mints.
+- **Credential separation** — outbound connectors use liaison warrants; local
+  compute and graph-vault credentials are resolved only by the trusted bound
+  runtime, never exposed to compiled effect values.
 
 ## Example
 
 [`Examples/pricing`](Examples/pricing) is a Lean project with an invoice's
 functions (`subtotal`, `discounted`, `shipping`, `vat`, `total`, `euros`);
-[`Examples/Client.lean`](Examples/Client.lean) asks lun to build it, registers
-this graph as a session, and updates its inputs:
+[`Examples/Client.lean`](Examples/Client.lean) illustrates building it and feeding
+this graph. The client sends an explicit Trace/Error policy and immutable
+organization/user/graph binding on registration and updates. Its real local run
+passes initial evaluation, incremental changes, error propagation and recovery.
+The graph itself is:
 
 ```lean
 do
@@ -95,7 +108,7 @@ do
 ```
 
 ```sh
-Examples/run.sh ../linen        # a local lun; a linen checkout to reuse its build (optional)
+Examples/run.sh ../linen        # historical client; envelope update required as noted above
 ```
 
 ```
@@ -136,16 +149,21 @@ Examples/run.sh ../linen        # a local lun; a linen checkout to reuse its bui
     ran: nothing
 ```
 
-(`ran` is read off the functions' traces.) Against a deployed lun, point the
+The transcript illustrates a run with Trace/Error granted (`ran` is read off
+the functions' traces). Against a deployed lun, the client also needs that
+execution envelope; point the
 client at the pushed repository:
 `lake exe lun-example --lun https://… --token … --repo https://github.com/typednotes/lun --commit <sha> --path Examples/pricing`.
 
 The same session over plain HTTP:
 
 ```sh
-curl -X POST $LUN/v0/builds/$BUILD/graphs/invoice/sessions -d '{"inputs": {"lines": […], "code": "", "country": "FR"}}'
+curl -X POST $LUN/v0/builds/$BUILD/graphs/invoice/sessions \
+  -H "Authorization: Bearer $LUN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"binding":{"org_id":"example-org","user_id":"example-user","graph_id":"invoice"},"policy":{"effects":["Trace","Error"],"domains":[]},"inputs":{"lines":[…],"code":"","country":"FR"}}'
 # 201 {"session": "9f…", "nodes": [...]}
-curl -X POST $LUN/v0/sessions/9f… -d '{"inputs": {"country": "DE"}}'
+curl -X POST $LUN/v0/sessions/9f… -H "Authorization: Bearer $LUN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"inputs": {"country": "DE"}}'
 # 200 {"changed": [{"id": 2, "input": "country", "output": "DE"}, {"id": 5, "function": "shipping", "args": [4, 2], "output": 890}, …], "nodes": [...]}
 ```
 
@@ -157,7 +175,7 @@ curl -X POST $LUN/v0/sessions/9f… -d '{"inputs": {"country": "DE"}}'
   monad `Eff` over a row of effects, producing a JSON value (`Lean.ToJson`).
   The row is the function's effect whitelist.
 - **A graph** is a program in linen's `Reactive` monad (`Control.Reactive`,
-  linen ≥ 1.3.0): named `input`s, and functions applied to observables (each
+  using the coordinated Linen runtime APIs): named `input`s, and functions applied to observables (each
   application is a `combineLatest` over the function). A function can be
   applied any number of times; a graph is acyclic by construction.
 
@@ -177,10 +195,11 @@ line in the program) or project concerned, unless:
   to definitional unfolding; implicit arguments, e.g. a polymorphic effect
   row, are instantiated by it; no coercion), non-dependent, ending in `Eff`,
   and:
-  - every effect in its row is one of linen's `Trace`, `Error ε`, `HTTP cap`,
-    `FileSystem cap`, handled by linen's own `Handler _ IO` instance (not one
-    the project defines);
-  - it is not `unsafe` and does not depend on `sorry`;
+  - every effect in its row is one of the eight supported effects, interpreted
+    by the canonical bounded `Handler _ Execution` instance;
+  - the transitive executable closure, including JSON dictionaries, does not
+    use project unsafe/extern/implemented-by definitions, axioms, initializers,
+    custom runners, raw IO or `sorry`;
 - each graph builds its nodes only through `input` and the declared functions
   (its definition is walked through every non-library constant it reaches;
   the graph builder's primitives are refused), does not depend on `sorry`,
@@ -188,6 +207,18 @@ line in the program) or project concerned, unless:
   functions with their arity — linen's other operators are refused. Every
   function in the graph is replaced by the declared function it names before
   it runs.
+
+Caller-owned `outputType`, `inputTypes` and ordered named `dependencies` add
+independent constraints to generated declarations. `OutputContract`,
+`WiringContract` and `SourceContract` are kernel-checked result, named-argument
+and source contracts, not merely compiler lint. Runtime `BoundWiring` and
+`BoundSources` consume equality with the actual graph, and constrained source
+constructors/decoders carry type evidence. Shape/closure auditing and canonical
+implementation rebinding complement these proofs. The app supplies source types
+keyed by configured input name and registers historic inputs with
+`recoverInputs:true`; incompatible values become source errors until edited.
+See [runtime guarantees](docs/runtime-guarantees.md) for the precise proof scope
+and trusted boundaries.
 
 Signatures and graph programs are Lean text, parsed as exactly one term each
 (they are embedded as raw string literals, never spliced as code).
@@ -227,10 +258,11 @@ With `LUN_TOKEN` set, every route but `/_health` needs
   "open": ["MyProject"],                         // optional: namespaces opened for signatures and graphs
   "functions": [
     { "name": "math.double", "module": "MyProject.Math",
-      "function": "MyProject.Math.double", "signature": "Nat → Eff [] Nat" }
+      "function": "MyProject.Math.double", "signature": "Nat → Eff [] Nat", "outputType": "Nat" }
   ],
   "graphs": [
-    { "name": "main", "program": "do\n  let x ← input \"x\" Nat\n  math.double x" }
+    { "name": "main", "program": "do\n  let x ← input \"x\" Nat\n  math.double x",
+      "inputTypes": {"x": "Nat"}, "dependencies": {"math.double": ["x"]} }
   ]
 }
 ```
@@ -245,6 +277,11 @@ The same request (same org) is the same build: submitting it again returns it.
 | `{"inputs": [x₁, x₂, …]}` — one call each | `{"outputs": [{"output": y₁}, {"error": "…"}, …]}` |
 
 A function's `Trace` output comes back as `"log"` (on every route).
+
+Request examples above show input data only. Effects additionally require the
+authenticated app's `binding`, `policy` and fresh function-name `connectors`
+grants as described in [runtime guarantees](docs/runtime-guarantees.md). Missing
+policy grants no effects; generated code cannot supply private runtime credentials.
 
 ### Graphs, once
 
@@ -290,8 +327,13 @@ typednotes app does; liaison checks the warrant, attaches the credential, and
 relays the answer. lun speaks liaison's wire format with liaison's own module
 (`Liaison.Wire`), so a warrant liaison would refuse as malformed is refused
 when the build is requested. It checks the branch with the host's compare /
-merge-base API and downloads the commit's archive. Public repositories are
-cloned with `git`.
+merge-base correspondence through the native `repositories.read` ancestry view,
+then materializes complete immutable tree and per-file views through the broker.
+Selectors consume private regular-file/bookkeeping witnesses; incomplete trees,
+unsafe entries and oversized checkouts are refused. There is no archive,
+signed-download or generic HTTP bypass. Native private repositories require
+an unambiguous `[owner,repo]` and SHA-1 commits; nested GitLab namespaces and
+SHA-256 native repositories are refused. Public/local repositories use `git`.
 
 ## Configuration
 
@@ -305,13 +347,15 @@ LUN_WORKDIR=/tmp/lun LUN_TOKEN=… LUN_LIAISON_URL=http://localhost:8080 lake ex
 | `LUN_PORT` | `8080` | |
 | `LUN_WORKDIR` | `/var/lib/lun` | builds (`builds/{id}/`: status, log, checkout, driver) and sessions (`sessions/`) |
 | `LUN_TOKEN` | — | bearer token for the API; unset means unauthenticated (logged loudly) |
-| `LUN_LIAISON_URL` | — | liaison, for private repositories |
+| `LUN_LIAISON_URL` | — | liaison, for private repositories and native connector effects |
+| `LUN_LIAISON_SDK_PATH` | — | local-mode-only SDK source override; generated packages otherwise require Liaison `v0.6.0` |
+| `LUN_TEMP_ROOT` | `/tmp/typednotes` | temporary files, confined beneath organization/user directories |
 | `LUN_BUILD_TIMEOUT` / `LUN_FETCH_TIMEOUT` / `LUN_CALL_TIMEOUT` | `3600` / `600` / `60` | seconds |
 | `LUN_PACKAGE_CACHE` | — | pre-built linen checkouts, `{cache}/linen/{rev}` |
 | `LUN_ID_SALT` | random | salt for build ids; set it so ids (and ready builds) survive restarts |
 | `LUN_ALLOW_LOCAL` | — | `1`: accept `file://` repositories and path dependencies. Tests and examples only |
 
-Needs `git`, `tar`, `elan`/`lake` and linen's native build dependencies on the
+Needs `git`, Python 3, libpq development files, `elan`/`lake` and linen's native build dependencies on the
 `PATH` (see the `Dockerfile`).
 
 ## Docker
@@ -326,7 +370,7 @@ docker run --rm -p 8080:8080 -v lun:/var/lib/lun \
 ```
 
 The image carries the Lean toolchain and a package cache of linen
-(`LINEN_REF`, default `v1.9.2`) pre-built for what functions need, so a build
+(`LINEN_REF`, coordinated target `v1.10.0`) pre-built for what functions need, so a build
 compiles only the project and its functions. To build it locally:
 `docker build -t lun .` (or `podman build`).
 
@@ -334,8 +378,9 @@ compiles only the project and its functions. To build it locally:
 
 ```sh
 lake test          # unit tests (#guard)
-test/e2e.sh ../linen         # end to end, against a linen checkout (>= 1.3.0; CI uses v1.9.2)
-Examples/run.sh ../linen     # the example
+test/e2e.sh ../linen         # end to end, against coordinated sibling checkouts
+python3 test/temporary_test.py /path/to/scratch
+PATH=/path/to/postgresql/bin:$PATH python3 test/runtime.py --temp-root /path/to/scratch
 ```
 
 `test/e2e.sh` turns `test/fixture` into a git repository, runs lun in local
@@ -344,12 +389,21 @@ refusal.
 
 ## Project status
 
-`lun` is at **v0**. Each call runs the compiled driver as a process (no
-long-lived workers); a graph request is one instant of its reactive graph, not
-a stream, and graphs may only apply the declared functions (not linen's `map`,
-`filter`, timed operators…); types bound a function's declared authority but
-are not a sandbox — the container is. See [`AGENTS.md`](AGENTS.md) for the
-layout and the full list of named gaps.
+The **0.3.0 release-preparation** suites pass the full Lun end-to-end suite and
+**69 compiled-driver runtime cases**. App-provisioned local grants, source
+recovery, native writer publication and adoption additionally pass the full
+app → compiled Lode → real broker → local Git → compiled Lun positive/denial
+pipeline. Supporting app/broker suites pass **99 API tests**, **24 browser groups**
+and **655 real broker HTTP cases**.
+
+Each call spawns a driver; graphs remain declared-function applications, with
+sequential input feeds and no long-lived workers. Kernel contracts and canonical
+bound handlers establish the documented guarantees. Build/container isolation,
+approved libraries, FFI/syscalls, database ACLs and authenticated local minting
+remain trusted boundaries; Lun does not independently verify local-service HMAC
+tags. Paid-provider/OAuth conformance and Linux/container verification are not
+claimed by the local fixtures. See [`AGENTS.md`](AGENTS.md) and
+[runtime guarantees](docs/runtime-guarantees.md).
 
 ## License
 

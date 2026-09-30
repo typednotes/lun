@@ -8,10 +8,11 @@ inputs, get back what changed). The vocabulary is linen's: functions, graphs,
 inputs, nodes, sessions. See `README.md` for the API.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
-Built on `linen` (pinned `v1.9.2` for lun itself; user projects need
-linen ≥ `1.3.0`, the first with the `Control.Reactive` the runtime uses).
-Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
-`v0.5.5`).
+Coordinated release set: **Lun 0.3.0 / Lode 0.3.0 / Typednotes 0.6.0 /
+Linen 1.10.0 / Liaison 0.6.0**. The current driver requires the Linen connector
+APIs and Liaison's pure `Liaison.Wire` SDK; the historical 1.3.0 Reactive minimum
+is not sufficient for this runtime. Package locks and image/default pins use this
+set. Publishing the local release tags and deploying remain the user's actions.
 
 ## Layout
 
@@ -28,7 +29,10 @@ Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
 - `Lun/Driver.lean` — the generated driver package (`files`): one module per
   function and per graph. Embeds `template/LunDriver/Runtime.lean` with
   `include_str` (tracked by the lakefile's `input_file driverRuntime`, so an
-  edited runtime rebuilds `Lun.Driver`). Pure.
+  edited runtime rebuilds `Lun.Driver`), plus the descriptor-relative temporary
+  syscall adapter. The generated package uses the user manifest's Linen source,
+  requires Liaison `v0.6.0`, and accepts `LUN_LIAISON_SDK_PATH` only in local mode.
+  Generation is pure.
 - `template/LunDriver/Runtime.lean` — **the driver runtime**, copied into
   every driver. `FunctionType` (which Lean types can be served and how to
   call them on JSON), graphs over linen's `Control.Reactive` (`input`, in
@@ -42,25 +46,31 @@ Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
   occurrences; values travel wrapped — `okValue`/`failedValue`/`blockedValue`
   — so a failure never ends a node's stream), `runGraph`/`sessionStart`/
   `sessionUpdate`, and `driverMain` (the executable's stdin/stdout
-  protocol). It imports linen ≥ 1.3.0 modules
-  (verified against 1.3.0 and 1.5.0), so it is **not** part of lun's own
-  build: it is compiled only inside a driver. `test/e2e.sh` is what
-  exercises it; `LunTest/Lun/DriverTest.lean` only checks it is embedded.
+  protocol). Canonical handlers run in `ReaderT ExecutionContext IO`.
+  `OutputContract`, `WiringContract` and `SourceContract` provide kernel-checked
+  caller-owned output, ordered named wiring and source-type/layout guarantees;
+  runtime binding consumes witnesses for the actual graph. Executable closure
+  auditing and graph validation remain additional checks, not sandbox proofs.
+  The template is compiled inside generated drivers, exercised by `test/e2e.sh`
+  and `test/runtime.py`; `LunTest/Lun/DriverTest.lean` checks generation/embedding.
 - `Lun/Diagnostics.lean` — `lake build` diagnostics (parsed by linen's
   `System.LakeLog`) attributed to a function, graph (with the line in the
   program), the project, the driver, or the build. Pure.
 - Commands run through linen's `System.Process.run` (deadline, process group
   killed) with its `hermeticGit`; the bearer token is compared with linen's
   `Crypto.ConstantTime`.
-- `Lun/Fetch.lean` — `git` for public repositories; GitHub/GitLab REST
-  through liaison for private ones.
+- `Lun/Fetch.lean` — `git` for public/local repositories; private GitHub/GitLab
+  use broker-owned `repositories.read` ancestry, complete immutable tree and
+  per-file views. Private `NativeFile` witnesses carry selector/bookkeeping/
+  regular-file evidence. No archive, signed-download or generic-provider bypass.
 - `Lun/Build.lean` — ids, statuses (`status.json`, atomic writes), the build
   pipeline (fetch → check, then under a lock generate → `lake build` →
   describe), the package-cache seeding, and `Builder.call` (running a ready
   driver).
 - `Lun/Session.lean` — sessions: stored under `{workdir}/sessions/` (atomic
   writes), one lock per session, driven through `Builder.call`
-  (`session-start`/`session-update`).
+  (`session-start`/`session-update`). `ExecutionRefresh` consumes narrowing
+  evidence; bindings are immutable and persisted public ceilings omit warrants.
 - `Lun/Server.lean` — the HTTP routes. `Main.lean` — environment.
 - `Examples/` — `pricing/` (a user project: an invoice's functions),
   `Client.lean` (`lake exe lun-example`: build, register the invoice graph as
@@ -75,12 +85,16 @@ Speaks to `liaison` with liaison's own wire module, `Liaison.Wire` (pinned
 
 ```
 lake test
-test/e2e.sh ../linen      # needs jq, git, and a linen checkout >= 1.3.0
+test/e2e.sh ../linen      # jq, git and the coordinated Linen/Liaison checkouts
+python3 test/temporary_test.py /path/to/scratch
+PATH=/path/to/postgresql/bin:$PATH python3 test/runtime.py --temp-root /path/to/scratch
 ```
 
-`test/e2e.sh` picks a free port, runs lun with `LUN_ALLOW_LOCAL=1`, and
-takes a couple of minutes (it builds the fixture's driver ten times).
-`Examples/run.sh ../linen` runs the example (about 30 s with a built linen).
+`test/e2e.sh` picks a free port, runs lun with `LUN_ALLOW_LOCAL=1`, and compiles
+multiple positive/refusal fixtures; allow sufficient time for native driver
+builds. Use `LUN_E2E_WORKSPACE` for unpublished sibling overrides. The runtime
+fixture executes actual SCRAM queries and the real HMAC broker with local vault/
+provider peers. See `docs/runtime-guarantees.md` for full reproduction.
 
 ## Conventions
 
@@ -105,40 +119,45 @@ takes a couple of minutes (it builds the fixture's driver ten times).
 **Never run `git push` in this repo.** Commits are fine when asked for; pushing
 is always left to the user.
 
-## Known gaps (named, not silent)
+## Verified contracts and remaining boundaries
+
+- **Local release verification:** the full Lun end-to-end suite and 69 compiled
+  runtime cases pass; the app's suite additionally passes 99 API tests, 24 browser
+  groups and the full app → compiled Lode → broker → local Git → compiled Lun
+  positive/denial pipeline. Liaison passes 655 real broker HTTP cases. Controlled
+  provider replies do not establish live paid-provider/OAuth conformance.
 
 - **The container image has not been built here** (the local podman needed an
   interactive registry login). The Linux link of `lun` and of drivers is
   unverified; lun's own link and the drivers' were verified on macOS.
-- **Types are not a sandbox.** The checks bind the *declared* authority of a
-  function (its effect row, handled by linen's handlers), but a project's code can
-  still reach arbitrary `IO` through `unsafe` definitions, `@[implemented_by]`
-  or `@[extern]` deeper inside a function (only the declared function itself
-  is checked for `unsafe`), and its `lakefile.lean` runs arbitrary code at build
-  time. The container is the isolation boundary; run lun with no credentials
-  of its own and no network access beyond what builds need.
-- **The graph check is a walk, a denylist and a graph check, not a proof.** The
-  walk refuses the builder's primitives (`Reactive.register`, `addNode`,
-  `fnImpl`, `fn`, `Builder.mk`, `Graph.mk`, `Graph.rebind`, `Operator.*`)
-  anywhere in the graph's non-library code; library functions are trusted, not
-  walked. What makes it safe is the graph check (`GraphImpl.ofGraph`): only inputs
-  and `combineLatest`s over functions labelled as declared functions, with their
-  arities, and every function replaced by that function before anything runs.
-  Known consequences, neither of which breaks safety (every value is decoded
-  by the declared function it reaches): a function registered by a library
-  operator inside `scope «#function».«name»` is accepted and runs as that function
-  (so its observable's type may be the wrong one); an observable taken out of
-  a *separate* `Reactive.build` names a node index of another graph, which
-  linen's build accepts if that index is earlier.
+- **Types are not a sandbox.** The executable closure and JSON dictionaries are
+  now audited transitively for unsafe/implemented-by/extern, axioms, project
+  initializers and raw IO/runtime entry points. Lakefiles and metaprograms still
+  execute during builds; the build container and trusted library/FFI remain the
+  isolation boundary. Private service context is injected only after compilation,
+  and service credentials are stripped from child environments. See
+  `docs/runtime-guarantees.md` for the exact trusted boundaries.
+- **Graph guarantees are proved and checked.** `OutputContract` proves the
+  caller-owned result type, `WiringContract` proves ordered named direct arguments,
+  and `SourceContract` proves configured source presence/layout; checked input
+  constructors consume actual type equality. `BoundWiring`/`BoundSources` require
+  equality with the runtime graph before execution. The transitive walk additionally
+  refuses builder primitives/raw subjects and the graph validator rebinds all
+  implementations to declared functions. These are specific kernel guarantees,
+  not a proof of arbitrary library code or a general process sandbox.
 - **Graphs are function applications only.** linen's other operators (`map`,
   `filter`, `scan`, the timed ones, …) and `Operator`s are refused: they would
   run Lean code that is not a declared function (`mapM` even `IO`), and a graph
   request is one instant (every input fed once at time 0), not a stream.
 - **An `input` cannot be relabelled** (`node x ← input "x" Nat` fails: the
   input's label is its name). `node` works on function applications.
-- **`HTTP` and `FileSystem` functions act from lun's container directly**, not
-  through liaison: no credentials, no metering, no audit row. Their capability
-  (in the signature) bounds what they may reach.
+- **Anonymous `HTTP` and temporary `FileSystem` operations** act locally.
+  `AuthorizedHTTP` consumes static scope, org domain/standard-port permission and
+  public DNS-address evidence; transport pins that address and follows no redirects.
+  `TemporaryPath` consumes static rights and an org/user-bound relative selector;
+  descriptor-relative syscalls refuse traversal/symlinks and unsafe hard-link reads.
+  These calls have no broker credential/metering/audit row; FFI/syscalls and the
+  build/container boundary remain trusted.
 - **Functions run in-process per call**: each call spawns the driver (no
   long-running per-function service, no pooling). Graphs evaluate
   sequentially.
@@ -149,13 +168,23 @@ is always left to the user.
   session whose build is gone fails its next update.
 - **One compilation at a time** (fetches run concurrently). A queued build's
   warrant is used as soon as the build starts fetching, not after the queue.
-- **Private repositories**: github.com and gitlab.com only (the connections'
-  `base_url`s); archives are held in memory; submodules are not fetched on
-  either path. GitLab's archive, GitHub's compare and GitLab's merge-base go
-  through liaison; GitHub's signed tarball URL is fetched directly.
-- **Only `Trace`, `Error`, `HTTP`, `FileSystem`** effects are allowed in a function
-  (those with a configuration-free `Handler _ IO` in linen). `Reader`, `State`,
-  `PostgreSQL`, … would need configuration lun does not have.
+- **Private repositories:** github.com/gitlab.com, unambiguous `[owner,repo]`,
+  SHA-1 commits, bounded complete trees and regular files only. Native ancestry/
+  tree/file requests stay brokered. Nested GitLab namespaces, native SHA-256
+  repositories, symlinks and submodules are explicit refusals.
+- **Eight canonical runtime effects** are supported: Trace, Error, HTTP,
+  FileSystem, Connector, PostgreSQL, SecretStore and ObjectStore. Bound compute,
+  graph-vault and object operations require explicit grants and private runtime
+  configuration. Historical vault versions, arbitrary object write metadata,
+  binary object writes and caller pagination cursors remain explicit refusals.
+  Other rows (Reader, State, custom effects) are refused; there is no IO fallback.
+- **App/runtime integration is implemented:** trusted actor-bound compute and
+  graph-vault grants, live three-document provisioning/revocation, source recovery
+  with `recoverInputs:true`, and organization writer-tool forwarding/narrowing
+  are exercised by the whole-pipeline fixture. Local PostgreSQL/SecretStore
+  authorization trusts the authenticated app and vault-protected projections;
+  local HMAC authenticity is not independently verified in Lun. Outbound
+  Connector/ObjectStore HMAC checks execute at Liaison.
 - **A project linked to a linen revision the package cache lacks** builds its
   linen from scratch (correct but slow). The cache holds one revision.
 - **Build ids change across restarts unless `LUN_ID_SALT` is set.**
