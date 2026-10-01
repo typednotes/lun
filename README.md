@@ -22,7 +22,7 @@
 
 `lun` turns a Lean project — a git repository pinned at a commit — into typed
 services. You name some of its **functions**, each under a declared signature,
-and some **graphs**: programs in [`linen`](https://github.com/typednotes/linen)'s
+and some **graphs**: programs in [`linen`](https://github.com/typednotes/linen/tree/main)'s
 reactive `Control.Reactive` monad that wire those functions together. lun
 fetches the project, checks every signature and every graph, compiles it, and
 serves it over HTTP: each function on its own, each graph at once, or as a
@@ -39,9 +39,9 @@ runtime/image defaults use this set; local release tags still require publicatio
 
 <p align="center"><sub>The example's <code>invoice</code> graph after <code>{"country": "DE"}</code>, drawn with Graphviz by <code>lake exe lun-example --dot</code>.</sub></p>
 
-The projects it runs are the ones [`lode`](https://github.com/typednotes/lode),
+The projects it runs are the ones [`lode`](https://github.com/typednotes/lode/tree/main),
 the agent, writes; private repositories and outbound connector credentials are
-handled through [`liaison`](https://github.com/typednotes/liaison). Bound local
+handled through [`liaison`](https://github.com/typednotes/liaison/tree/main). Bound local
 compute and graph-vault effects use lun's private service identity.
 
 ## Table of contents
@@ -66,7 +66,7 @@ compute and graph-vault effects use lun's private service identity.
   and `ObjectStore`.
 - **Notebook authority** — caller-owned output/source types, four-ceiling
   connector scopes, immutable session bindings, schema-confined compute and
-  descriptor-relative temporary files. See [runtime guarantees](docs/runtime-guarantees.md)
+  descriptor-relative temporary files. See [runtime guarantees](https://github.com/typednotes/lun/blob/main/docs/runtime-guarantees.md)
   for proofs, integration metadata, supported operations and trusted boundaries.
 - **Reactive graphs** — written in linen's `Reactive` monad, where each
   function applies to observables; wiring a function to a value of the wrong
@@ -86,9 +86,9 @@ compute and graph-vault effects use lun's private service identity.
 
 ## Example
 
-[`Examples/pricing`](Examples/pricing) is a Lean project with an invoice's
+[`Examples/pricing`](https://github.com/typednotes/lun/tree/main/Examples/pricing) is a Lean project with an invoice's
 functions (`subtotal`, `discounted`, `shipping`, `vat`, `total`, `euros`);
-[`Examples/Client.lean`](Examples/Client.lean) illustrates building it and feeding
+[`Examples/Client.lean`](https://github.com/typednotes/lun/blob/main/Examples/Client.lean) illustrates building it and feeding
 this graph. The client sends an explicit Trace/Error policy and immutable
 organization/user/graph binding on registration and updates. Its real local run
 passes initial evaluation, incremental changes, error propagation and recovery.
@@ -217,7 +217,7 @@ constructors/decoders carry type evidence. Shape/closure auditing and canonical
 implementation rebinding complement these proofs. The app supplies source types
 keyed by configured input name and registers historic inputs with
 `recoverInputs:true`; incompatible values become source errors until edited.
-See [runtime guarantees](docs/runtime-guarantees.md) for the precise proof scope
+See [runtime guarantees](https://github.com/typednotes/lun/blob/main/docs/runtime-guarantees.md) for the precise proof scope
 and trusted boundaries.
 
 Signatures and graph programs are Lean text, parsed as exactly one term each
@@ -280,7 +280,7 @@ A function's `Trace` output comes back as `"log"` (on every route).
 
 Request examples above show input data only. Effects additionally require the
 authenticated app's `binding`, `policy` and fresh function-name `connectors`
-grants as described in [runtime guarantees](docs/runtime-guarantees.md). Missing
+grants as described in [runtime guarantees](https://github.com/typednotes/lun/blob/main/docs/runtime-guarantees.md). Missing
 policy grants no effects; generated code cannot supply private runtime credentials.
 
 ### Graphs, once
@@ -356,12 +356,27 @@ LUN_WORKDIR=/tmp/lun LUN_TOKEN=… LUN_LIAISON_URL=http://localhost:8080 lake ex
 | `LUN_ALLOW_LOCAL` | — | `1`: accept `file://` repositories and path dependencies. Tests and examples only |
 
 Needs `git`, Python 3, libpq development files, `elan`/`lake` and linen's native build dependencies on the
-`PATH` (see the `Dockerfile`).
+`PATH` (see the [`Dockerfile`](https://github.com/typednotes/lun/blob/main/Dockerfile)).
 
 ## Docker
 
-Images are published to `ghcr.io/typednotes/lun` — `edge` from `main`, and
-`latest`, `X.Y.Z` and `X.Y` from release tags.
+Images are published to `ghcr.io/typednotes/lun` only on version tags by
+[`docker-publish.yml`](https://github.com/typednotes/lun/blob/main/.github/workflows/docker-publish.yml).
+Stable `vX.Y.Z` tags publish `X.Y.Z`, `X.Y` and automatic `latest` through
+Docker metadata's semver rules. Prereleases publish their full version only,
+without advancing `latest` or a shortened version alias. Main pushes publish no image.
+
+[`lean_action_ci.yml`](https://github.com/typednotes/lun/blob/main/.github/workflows/lean_action_ci.yml)
+runs on pushes to `main`, pull requests targeting `main`, and manual dispatch.
+Push `main` and wait for CI on the release commit before pushing its version
+tag. The publisher's verification job has only `contents: read` and
+`actions: read`; [`ci/require-main-ci.sh`](https://github.com/typednotes/lun/blob/main/ci/require-main-ci.sh)
+requires the actual checkout to match the tag's commit, that commit to be
+reachable from `origin/main`, and its latest **push-to-main** CI run to be
+completed/success. Missing, pending or failed latest runs block publication;
+PR/manual CI and another commit's result do not qualify. After verification,
+the image job checks out the verified SHA and uses `packages: write` to build
+and publish, without repeating the full CI suite on tags.
 
 ```sh
 docker run --rm -p 8080:8080 -v lun:/var/lib/lun \
@@ -402,9 +417,9 @@ bound handlers establish the documented guarantees. Build/container isolation,
 approved libraries, FFI/syscalls, database ACLs and authenticated local minting
 remain trusted boundaries; Lun does not independently verify local-service HMAC
 tags. Paid-provider/OAuth conformance and Linux/container verification are not
-claimed by the local fixtures. See [`AGENTS.md`](AGENTS.md) and
-[runtime guarantees](docs/runtime-guarantees.md).
+claimed by the local fixtures. See [`AGENTS.md`](https://github.com/typednotes/lun/blob/main/AGENTS.md) and
+[runtime guarantees](https://github.com/typednotes/lun/blob/main/docs/runtime-guarantees.md).
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+Licensed under the [Apache License, Version 2.0](https://github.com/typednotes/lun/blob/main/LICENSE).
