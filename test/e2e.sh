@@ -51,7 +51,11 @@ if [ -n "${LUN_E2E_WORKSPACE:-}" ]; then
 else
   (cd "$root" && lake build lun >/dev/null)
 fi
-LUN_WORKDIR="$work/lun" LUN_PORT="$port" LUN_ALLOW_LOCAL=1 LUN_TOKEN=secret LUN_LIAISON_SDK_PATH="$root/../liaison" LUN_TEMP_ROOT="$work/temporary" LUN_LIAISON_URL="http://127.0.0.1:$broker_port" \
+# A clean CI checkout has the locked SDK fetched by Lake, not a sibling clone.
+# An explicit override remains available for unpublished local integration.
+sdk="${LUN_LIAISON_SDK_PATH:-$root/.lake/packages/liaison}"
+[ -f "$sdk/Liaison/Wire.lean" ] || fail "Liaison SDK missing at $sdk; build lun or set LUN_LIAISON_SDK_PATH"
+LUN_WORKDIR="$work/lun" LUN_PORT="$port" LUN_ALLOW_LOCAL=1 LUN_TOKEN=secret LUN_LIAISON_SDK_PATH="$sdk" LUN_TEMP_ROOT="$work/temporary" LUN_LIAISON_URL="http://127.0.0.1:$broker_port" \
   LUN_ID_SALT=e2e "$root/.lake/build/bin/lun" >"$work/lun.log" 2>&1 &
 lun_pid=$!
 trap 'kill $lun_pid $broker_pid 2>/dev/null || true' EXIT
@@ -100,7 +104,8 @@ functions='[
 ]'
 graphs='[
   {"name": "main", "program": "do\n  let x ← input \"x\" Nat\n  let s ← seed\n  let d ← math.double x\n  let d2 ← math.double d\n  let a ← add d2 s\n  let n ← succ a\n  render n"},
-  {"name": "points", "program": "do\n  let p ← input \"p\" Fixture.Point\n  let y ← input \"y\" Nat\n  let n ← norm1 p\n  let a ← add n y\n  let m ← math.double y\n  render a"}
+  {"name": "points", "program": "do\n  let p ← input \"p\" Fixture.Point\n  let y ← input \"y\" Nat\n  let n ← norm1 p\n  let a ← add n y\n  let m ← math.double y\n  render a"},
+  {"name": "diamond", "program": "do\n  let x ← input \"x\" Nat\n  let root ← math.double x\n  let left ← succ root\n  let right ← math.double root\n  let joined ← add left right\n  render joined"}
 ]'
 
 # ── Refusals before any build ───────────────────────────────────────────────
@@ -164,6 +169,17 @@ expect "a failed node recovers when its input changes" 200 \
   "$(api POST "/v0/sessions/$sid" '{"inputs": {"p": {"x": 1, "y": 0}}}')"
 expect "several inputs at once" 200 '[.changed[] | .id] == [0, 1, 2, 3, 4, 5] and .changed[4].output == 20' \
   "$(api POST "/v0/sessions/$sid" '{"inputs": {"p": {"x": 2, "y": 2}, "y": 10}}')"
+
+# Shared upstream -> two derived nodes -> join, then repeated observable emissions.
+r="$(api POST "/v0/builds/$id/graphs/diamond/sessions" '{"inputs":{"x":5}}')"
+expect "a diamond joins two nodes derived from the same upstream" 201 '.nodes[5].output == "#31"' "$r"
+diamond="$(jq -r .session <<<"${r#* }")"
+expect "the diamond emits again after a new source value" 200 '.nodes[5].output == "#37" and .updates == 1' \
+  "$(api POST "/v0/sessions/$diamond" '{"inputs":{"x":6}}')"
+expect "the same node emits a third value in its live session" 200 '.nodes[5].output == "#43" and .updates == 2' \
+  "$(api POST "/v0/sessions/$diamond" '{"inputs":{"x":7}}')"
+expect "repeating an unchanged source does not fabricate an emission" 200 '.changed == [] and .updates == 3' \
+  "$(api POST "/v0/sessions/$diamond" '{"inputs":{"x":7}}')"
 expect "a session of an unknown graph" 404 '.error | test("no graph")' \
   "$(api POST "/v0/builds/$id/graphs/nope/sessions" '{}')"
 
