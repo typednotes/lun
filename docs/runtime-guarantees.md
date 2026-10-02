@@ -1,5 +1,22 @@
 # Notebook runtime authority
 
+## Pure public sessions (Lun 0.3.1)
+
+`POST /v0/builds/{id}/graphs/{name}/sessions` accepts `safeShare:true`. A private
+`PureShareExecution` witness carries policy-derived effects, proof that every
+effect is Trace or Error, and empty connector-grant evidence. `no_external` proves
+any other effect name absent. Start/update consume that witness before invoking
+the driver; `SessionRecord.safeShare` persists it across restarts. Existing
+`ExecutionRefresh` narrowing and immutable binding checks still apply, so an
+update cannot restore wider authority or turn off the stored mode.
+
+The app sends no domains and owns viewer identity, expiry, rate limits,
+publication snapshots and response filtering. Private-source-derived results
+may be intentionally published; this runtime proof is about external-effect
+authority, not information-flow secrecy of published data. Credentialed rebuilds
+are never delegated to anonymous viewers. Actual compiled-driver refusal cases
+check no vault reads, broker use or local DB writes before denied effects.
+
 This contract describes the coordinated **Lun 0.3.0 / Lode 0.3.0 /
 Typednotes 0.6.0 / Linen 1.10.0 / Liaison 0.6.0** release. Package locks and
 runtime/image defaults use these versions. Local release tags require publication

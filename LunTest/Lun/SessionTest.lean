@@ -30,6 +30,13 @@ def execution (effects domains : List String) : Json := Json.mkObj
   [("binding", Json.mkObj [("org_id", "o"), ("user_id", "u")]),
    ("policy", Json.mkObj [("effects", toJson effects), ("domains", toJson domains)])]
 
+#guard (PureShareExecution.check (execution ["Trace", "Error"] [])).isOk
+#guard ["HTTP", "FileSystem", "PostgreSQL", "SecretStore", "ObjectStore", "Connector"].all fun name =>
+  (PureShareExecution.check (execution [name] [])).toOption.isNone
+#guard (PureShareExecution.check ((execution ["Trace"] []).setObjVal! "connectors" (Json.mkObj [("fn", Json.arr #[Json.null])]))).toOption.isNone
+example (share : PureShareExecution) : "PostgreSQL" ∉ share.effects := share.no_external "PostgreSQL" (by decide) (by decide)
+example (share : PureShareExecution) : "Connector" ∉ share.effects := share.no_external "Connector" (by decide) (by decide)
+
 #guard executionNarrows (execution ["HTTP"] ["example.org"]) (execution ["HTTP", "Trace"] ["example.org", "other.org"])
 #guard !executionNarrows (execution ["HTTP", "Trace"] []) (execution ["HTTP"] [])
 #guard !executionNarrows (execution ["HTTP"] ["other.org"]) (execution ["HTTP"] ["example.org"])

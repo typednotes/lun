@@ -36,6 +36,35 @@ namespace Lun
 open Lean (Json toJson)
 open System (FilePath)
 
+/-- Public shares may compute and report errors/traces, but cannot acquire an
+    external-effect permission or any credential-bearing connector authority. -/
+structure PureShareExecution where
+  private mk ::
+  value : Json
+  effects : List String
+  effectsDerived : value.getObjVal? "policy" >>= (·.getObjValAs? (List String) "effects") = .ok effects
+  pureOnly : ∀ name ∈ effects, name = "Trace" ∨ name = "Error"
+  noConnectors : ((value.getObjVal? "connectors").toOption.getD (Json.mkObj []) == Json.mkObj []) = true
+
+def PureShareExecution.check (value : Json) : Except String PureShareExecution := do
+  match hd : value.getObjVal? "policy" >>= (·.getObjValAs? (List String) "effects") with
+  | .error error => throw error
+  | .ok effects =>
+    if hp : effects.all (fun name => name == "Trace" || name == "Error") = true then
+      if hc : ((value.getObjVal? "connectors").toOption.getD (Json.mkObj []) == Json.mkObj []) = true then
+        return ⟨value, effects, hd, fun name member => by
+          have h := List.all_eq_true.mp hp name member
+          simpa only [Bool.or_eq_true, beq_iff_eq] using h, hc⟩
+      else throw "public shares cannot carry connector grants"
+    else throw "public shares permit only Trace and Error"
+
+theorem PureShareExecution.no_external (share : PureShareExecution) (name : String)
+    (hTrace : name ≠ "Trace") (hError : name ≠ "Error") : name ∉ share.effects := by
+  intro membership
+  rcases share.pureOnly name membership with h | h
+  · exact hTrace h
+  · exact hError h
+
 -- ── Storage ─────────────────────────────────────────────────────────────────
 
 /-- A session id: 64 lowercase hex digits (the same shape as a build id). -/
@@ -57,6 +86,7 @@ structure SessionRecord where
   updates : Nat
   /-- Authority and user binding; never accepted from a compiled graph's state. -/
   execution : Json := Json.mkObj []
+  safeShare : Bool := false
 
 /-- Persist only public ceilings and binding, never arbitrary request fields,
     private runtime data, credential values or operation warrants. -/
@@ -77,14 +107,14 @@ instance : Lean.ToJson SessionRecord where
     let execution := publicExecution r.execution
     Json.mkObj
     [ ("build", toJson r.build), ("graph", toJson r.graph), ("state", r.state), ("nodes", r.nodes)
-    , ("updates", toJson r.updates), ("execution", execution) ]
+    , ("updates", toJson r.updates), ("execution", execution), ("safeShare", toJson r.safeShare) ]
 
 /-- Read a stored session back. -/
 def SessionRecord.ofJson (j : Json) : Except String SessionRecord := do
   return { build := ← j.getObjValAs? String "build", graph := ← j.getObjValAs? String "graph"
            state := ← j.getObjVal? "state", nodes := ← j.getObjVal? "nodes"
            updates := ← j.getObjValAs? Nat "updates"
-           execution := (j.getObjVal? "execution").toOption.getD (Json.mkObj []) }
+           execution := (j.getObjVal? "execution").toOption.getD (Json.mkObj []), safeShare := (j.getObjValAs? Bool "safeShare").toOption.getD false }
 
 /-- The public view of a session: everything but the driver's state. -/
 def SessionRecord.view (r : SessionRecord) (session : String) : Json :=
@@ -231,8 +261,14 @@ def Builder.startSession (b : Builder) (build graph body : String) : IO Answer :
   let req ← match parseBody body with
     | .ok j => pure j
     | .error a => return a
-  let execution := Json.mkObj <| ["policy", "binding", "connectors"].filterMap fun name =>
+  let initial := Json.mkObj <| ["policy", "binding", "connectors"].filterMap fun name =>
     (req.getObjVal? name).toOption.map (name, ·)
+  let safeShare := (req.getObjValAs? Bool "safeShare").toOption == some true
+  let execution ← if safeShare then
+    match PureShareExecution.check initial with
+    | .ok checked => pure checked.value
+    | .error error => return errorAnswer 403 error
+    else pure initial
   let a ← b.call build "session-start" graph
     ((execution.setObjVal! "inputs" ((req.getObjVal? "inputs").toOption.getD (Json.mkObj []))).setObjVal! "recoverInputs"
       (Json.bool ((req.getObjValAs? Bool "recoverInputs").toOption == some true))).compress
@@ -241,7 +277,7 @@ def Builder.startSession (b : Builder) (build graph body : String) : IO Answer :
   | .error e, _ | _, .error e => return e
   | .ok state, .ok nodes =>
     let session := Data.Hex.encode (← Crypto.SecureRandom.randomBytes 32)
-    writeSession b.cfg session { build, graph, state, nodes, updates := 0, execution }
+    writeSession b.cfg session { build, graph, state, nodes, updates := 0, execution, safeShare }
     let view := (SessionRecord.view { build, graph, state, nodes, updates := 0 } session)
     return { status := 201, body := match a.body.getObjVal? "log" with
       | .ok log => view.setObjVal! "log" log
@@ -265,7 +301,11 @@ def Builder.updateSession (b : Builder) (ss : Sessions) (session body : String) 
         return errorAnswer 403 "a session's organization/user binding cannot change"
     let some refresh := ExecutionRefresh.check? r.execution req
       | return errorAnswer 403 "a session update cannot widen its policy or connector ceilings"
-    let execution := refresh.execution
+    let execution ← if r.safeShare then
+      match PureShareExecution.check refresh.execution with
+      | .ok checked => pure checked.value
+      | .error error => return errorAnswer 403 error
+      else pure refresh.execution
     let a ← b.call r.build "session-update" r.graph
       (execution.mergeObj (Json.mkObj [ ("state", r.state)
                   , ("inputs", (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])) ])).compress

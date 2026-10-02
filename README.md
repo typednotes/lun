@@ -29,9 +29,10 @@ serves it over HTTP: each function on its own, each graph at once, or as a
 live **session** whose inputs you update one at a time — only what depends on
 them runs again, and only what changed comes back.
 
-This documentation describes the coordinated **Lun 0.3.0 / Lode 0.3.0 /
-Typednotes 0.6.0 / Linen 1.10.0 / Liaison 0.6.0** release. Package pins,
-runtime/image defaults use this set; local release tags still require publication.
+The current runtime release is **Lun 0.3.1**, adding proof-checked pure public
+sessions for Typednotes 0.9.0. See [release notes](docs/release-0.3.1.md).
+Published source pins remain Linen 1.10.0 and Liaison's pure 0.6.0 SDK; deployment
+pairs this runtime with Liaison 0.6.3 and the existing Lode 0.4.2 image.
 
 <p align="center">
   <img src="docs/invoice.svg" alt="The invoice graph of the example, after its country input changed: shipping, vat, total and euros changed, subtotal and discounted did not run" width="760">
@@ -76,6 +77,10 @@ compute and graph-vault effects use lun's private service identity.
   input set to its current value runs nothing), and answers with the nodes
   whose outcome changed. A failing function recovers when its inputs change.
   Sessions survive restarts.
+- **Pure public sessions** — `safeShare:true` requires private checked evidence
+  that effects are Trace/Error-only and connector grants are empty. Session
+  updates consume the same check and cannot widen stored ceilings. Effectful
+  nodes refuse before credentials or external IO; there is no public rebuild.
 - **Errors stay local** — a failure is its node's outcome; its dependents are
   skipped, and the rest of the graph carries on.
 - **Diagnostics where they belong** — every build message is attributed to
