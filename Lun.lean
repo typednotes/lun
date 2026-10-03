@@ -5,5 +5,6 @@ import Lun.Manifest
 import Lun.Diagnostics
 import Lun.Fetch
 import Lun.Build
+import Lun.WorkerCache
 import Lun.Session
 import Lun.Server

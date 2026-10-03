@@ -14,7 +14,7 @@
   <a href="https://github.com/typednotes/lun/pkgs/container/lun"><img src="https://img.shields.io/badge/ghcr.io-typednotes%2Flun-blue?logo=docker" alt="Docker image"></a>
   <a href="https://github.com/typednotes/lun/tags"><img src="https://img.shields.io/github/v/tag/typednotes/lun?label=version&sort=semver" alt="Version"></a>
   <a href="https://lean-lang.org/"><img src="https://img.shields.io/badge/Lean-v4.34.0-blue" alt="Lean v4.34.0"></a>
-   <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v1.10.0-c9b896" alt="Built on linen v1.10.0"></a>
+   <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v1.11.0-c9b896" alt="Built on linen v1.11.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 </p>
 
@@ -29,10 +29,18 @@ serves it over HTTP: each function on its own, each graph at once, or as a
 live **session** whose inputs you update one at a time — only what depends on
 them runs again, and only what changed comes back.
 
-The current runtime release is **Lun 0.3.1**, adding proof-checked pure public
-sessions for Typednotes 0.9.0. See [release notes](docs/release-0.3.1.md).
-Published source pins remain Linen 1.10.0 and Liaison's pure 0.6.0 SDK; deployment
-pairs this runtime with Liaison 0.6.3 and the existing Lode 0.4.2 image.
+The local **Lun 0.3.2** implementation adds bounded loaded graph/driver workers,
+building on 0.3.1's proof-checked pure public sessions. See
+[release preparation](docs/release-0.3.2.md): publish Linen 1.11.0 before publishing
+this runtime. The dependency is pinned and locked to its exact local release
+commit, verified with the normal locked build. Liaison's pure SDK remains
+0.6.0; the deployed broker remains 0.6.3.
+
+The new repeatable [arithmetic graph benchmark](docs/throughput.md) measures the
+actual compiled HTTP and isolated-session paths before and after process caching.
+The cache retains checked templates and rebuilds execution context and authority
+on every request; measured results and methodology are linked above. Deploying
+this optimization requires the new runtime image.
 
 <p align="center">
   <img src="docs/invoice.svg" alt="The invoice graph of the example, after its country input changed: shipping, vat, total and euros changed, subtotal and discounted did not run" width="760">
@@ -59,6 +67,11 @@ compute and graph-vault effects use lun's private service identity.
 - [License](#license)
 
 ## Features
+
+- **Loaded compiled workers** — bounded actor/build/entry-point cache, fresh
+  request authority, deadline-aware queues and correlated replies. Session state
+  stays explicit; failed calls are never replayed. `LUN_WORKERS` defaults to 4
+  and accepts 1–16. Old driver artifacts are refused and rebuilt.
 
 - **Typed functions** — a function of the project is served only if it *is*
   a function of its declared signature `α₁ → … → αₙ → Eff effs β`, with JSON
@@ -356,6 +369,7 @@ LUN_WORKDIR=/tmp/lun LUN_TOKEN=… LUN_LIAISON_URL=http://localhost:8080 lake ex
 | `LUN_LIAISON_SDK_PATH` | — | local-mode-only SDK source override; generated packages otherwise require Liaison `v0.6.0` |
 | `LUN_TEMP_ROOT` | `/tmp/typednotes` | temporary files, confined beneath organization/user directories |
 | `LUN_BUILD_TIMEOUT` / `LUN_FETCH_TIMEOUT` / `LUN_CALL_TIMEOUT` | `3600` / `600` / `60` | seconds |
+| `LUN_WORKERS` | `4` | loaded compiled workers across all builds/actors; integer 1–16; queue time is part of the call deadline |
 | `LUN_PACKAGE_CACHE` | — | pre-built linen checkouts, `{cache}/linen/{rev}` |
 | `LUN_ID_SALT` | random | salt for build ids; set it so ids (and ready builds) survive restarts |
 | `LUN_ALLOW_LOCAL` | — | `1`: accept `file://` repositories and path dependencies. Tests and examples only |
@@ -417,8 +431,9 @@ app → compiled Lode → real broker → local Git → compiled Lun positive/de
 pipeline. Supporting app/broker suites pass **99 API tests**, **24 browser groups**
 and **655 real broker HTTP cases**.
 
-Each call spawns a driver; graphs remain declared-function applications, with
-sequential input feeds and no long-lived workers. Kernel contracts and canonical
+The local 0.3.2 implementation reuses bounded actor-bound compiled workers;
+graphs remain declared-function applications with sequential input feeds.
+Fresh execution context, correlated replies, kernel contracts and canonical
 bound handlers establish the documented guarantees. Build/container isolation,
 approved libraries, FFI/syscalls, database ACLs and authenticated local minting
 remain trusted boundaries; Lun does not independently verify local-service HMAC

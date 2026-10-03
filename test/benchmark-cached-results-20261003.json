@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-10-03T08:09:23.546237+00:00",
+  "host": "macOS-26.6.2-arm64-arm-64bit",
+  "cpu_count": 16,
+  "runner_commit": "c1c6ee9cf4fe61d3ea8c876092b4863d6afbab29",
+  "runner_dirty": true,
+  "source_sha256": {
+    "lun/Lun/WorkerCache.lean": "5a946706521e16eed5965b72ce99ee63a9dd1cd8932321c4b5afc14dce86d154",
+    "lun/Lun/Build.lean": "39eabfa7f84086d918ddc3acb9b7780dc5a6a6f4bb9956dba03e9986764887e3",
+    "lun/template/LunDriver/Runtime.lean": "9b85059d59ee61b1e165e0a2759f7e5955a6c21493f38dcababeb14e9aaf443d",
+    "linen/Linen/System/Worker.lean": "928e3bf8fcfa60ff9a0586bf7516d7631fbaed91502c8e297f6583fd5c3a603a"
+  },
+  "worker_count": 4,
+  "runtime_contract": "bounded-eff-worker-v2",
+  "compile_seconds_excluded": 24.983617374906316,
+  "warmup_requests_excluded": 20,
+  "graph": "Nat + Nat -> Eff [] Nat",
+  "rows": [
+    {"mode":"graph","concurrency":1,"requests":300,"seconds":0.5332137909717858,"qps":562.6261081005574,"p50_ms":1.793625,"p95_ms":1.860375,"p99_ms":1.88725,"errors":0},
+    {"mode":"graph","concurrency":4,"requests":300,"seconds":0.5201716250739992,"qps":576.7327273134559,"p50_ms":1.741,"p95_ms":1.841833,"p99_ms":3.238083,"errors":0},
+    {"mode":"graph","concurrency":8,"requests":300,"seconds":0.12823179201222956,"qps":2339.5134333877886,"p50_ms":1.851625,"p95_ms":8.858542,"p99_ms":17.119083,"errors":0},
+    {"mode":"session","concurrency":1,"requests":300,"seconds":0.6358152080792934,"qps":471.83520650010405,"p50_ms":2.116791,"p95_ms":2.179333,"p99_ms":2.244292,"errors":0},
+    {"mode":"session","concurrency":4,"requests":300,"seconds":0.17227745801210403,"qps":1741.3769825819134,"p50_ms":2.145792,"p95_ms":2.527209,"p99_ms":6.85325,"errors":0},
+    {"mode":"session","concurrency":8,"requests":300,"seconds":0.1451505001168698,"qps":2066.8202986448623,"p50_ms":3.40625,"p95_ms":8.142708,"p99_ms":10.9865,"errors":0}
+  ],
+  "method": "Local HTTP with per-worker HTTPConnection objects (automatic reconnect if server closes); modes run graph then session, concurrency 1/4/8 in order. Only 20 sequential graph requests are warmed; later worker cold starts remain in timings. Session rows include setup/teardown overhead in QPS denominator; latencies cover only evaluated requests; all results validated."
+}

@@ -44,6 +44,7 @@ import Lun.Manifest
 import Lun.Diagnostics
 import Linen.System.Process
 import Lun.Fetch
+import Lun.WorkerCache
 
 namespace Lun
 
@@ -61,6 +62,7 @@ structure Config where
   buildTimeoutMs : Nat := 3600 * 1000
   fetchTimeoutMs : Nat := 600 * 1000
   callTimeoutMs : Nat := 60 * 1000
+  workerCapacity : WorkerCache.Capacity := WorkerCache.defaultCapacity
   /-- Pre-built packages: `{cache}/linen/{rev}` is a linen checkout, built,
       at commit `rev`. -/
   packageCache : Option FilePath := none
@@ -200,10 +202,12 @@ structure Builder where
   cfg : Config
   running : IO.Ref (List String)
   lock : Std.Mutex Unit
+  workers : WorkerCache.Cache
 
 def Builder.new (cfg : Config) : IO Builder := do
   IO.FS.createDirAll (cfg.workdir / "builds")
-  return { cfg, running := ← IO.mkRef [], lock := ← Std.Mutex.new () }
+  return { cfg, running := ← IO.mkRef [], lock := ← Std.Mutex.new ()
+           workers := ← WorkerCache.Cache.new cfg.workdir cfg.workerCapacity }
 
 /-- Mark builds a restart interrupted as failed. -/
 def Builder.recover (b : Builder) : IO Unit := do
@@ -392,16 +396,17 @@ def Builder.call (b : Builder) (id kind name : String) (request : String) : IO A
     if let some value ← IO.getEnv name then protectedFields := (name, Json.str value) :: protectedFields
   let req := (req.setObjVal! "_runtime" (Json.mkObj protectedFields)).setObjVal! "liaisonUrl"
     (b.cfg.liaisonUrl.map Json.str |>.getD Json.null)
-  let r ← System.Process.run (driverExe b.cfg id).toString #[kind, name] b.cfg.callTimeoutMs
-    (env := credentialFreeEnv ++ protectedFields.toArray.map fun (name, _) => (name, none)) (input := req.compress)
-  let status := match r.exitCode with
-    | some 0 => 200 | some 1 => 400 | none => 504 | some _ => 502
-  if status == 504 then return errorAnswer 504 s!"the {kind} did not answer within the time limit"
-  match Json.parse r.stdout with
-  | .ok (.obj kvs) =>
-    let log := r.stderr.trimAscii.toString
-    let body := if log.isEmpty then Json.obj kvs else Json.obj (kvs.insert "log" (toJson log))
-    return { status, body }
-  | _ => return errorAnswer 502 (r.describe s!"the {kind}")
+  let framed ← match WorkerCache.Request.check id kind name req with
+    | .ok r => pure r
+    | .error e => return errorAnswer 400 e
+  try
+    let response ← b.workers.call framed (driverExe b.cfg id).toString
+      (credentialFreeEnv ++ protectedFields.toArray.map fun (name, _) => (name, none)) b.cfg.callTimeoutMs
+    return {status := (response.getObjValAs? Nat "status").toOption.getD 502
+            body := (response.getObjVal? "body").toOption.getD Json.null}
+  catch e =>
+    if (toString e).endsWith "worker request timed out" then
+      return errorAnswer 504 s!"the {kind} did not answer within the time limit"
+    return errorAnswer 502 s!"driver worker failed: {e}"
 
 end Lun

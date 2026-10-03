@@ -54,7 +54,7 @@ import Linen.Text.XML
 
 namespace LunDriver
 
-def runtimeContract : String := "bounded-eff-v1"
+def runtimeContract : String := "bounded-eff-worker-v2"
 
 open Lean Control.Monad.Effect Control.Reactive
 
@@ -74,6 +74,15 @@ def trustedModule (m : Name) : Bool := trustedImportSet.contains m || m == `LunD
 
 -- ── Caller-owned execution bounds ──────────────────────────────────────────
 
+/-- Per-request diagnostics have a kernel-checked byte ceiling. The IO reference
+    is fresh for each frame, never stored in a graph or a worker cache. -/
+structure BoundedTrace where
+  private mk ::
+  value : String
+  bounded : value.utf8ByteSize ≤ 1024 * 1024
+
+def emptyTrace : BoundedTrace := ⟨"", by decide⟩
+
 /-- Runtime upper bounds are supplied by the authenticated app, never by code
     compiled from a notebook. A build may permanently require these bounds. -/
 structure ExecutionContext where
@@ -88,12 +97,13 @@ structure ExecutionContext where
   liaisonUrl : Option String := none
   /-- Server-owned private stdin context, never exposed to an effect value. -/
   runtime : Json := Json.mkObj []
+  traceLog : Option (IO.Ref BoundedTrace) := none
 
 abbrev Execution := ReaderT ExecutionContext IO
 
-def ExecutionContext.ofRequest (req : Json) : Except String ExecutionContext := do
+def ExecutionContext.ofRequest (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : Except String ExecutionContext := do
   match req.getObjVal? "policy" with
-  | .error _ => return {}
+  | .error _ => return {traceLog}
   | .ok policy =>
     let effects ← policy.getObjValAs? (List String) "effects"
     let domains ← policy.getObjValAs? (List String) "domains"
@@ -107,7 +117,7 @@ def ExecutionContext.ofRequest (req : Json) : Except String ExecutionContext := 
               graph := (binding.getObjValAs? String "graph_id").toOption.getD "",
               connectors := (req.getObjVal? "connectors").toOption.getD (Json.mkObj []),
               liaisonUrl := (req.getObjValAs? String "liaisonUrl").toOption,
-              runtime := (req.getObjVal? "_runtime").toOption.getD (Json.mkObj []) }
+              runtime := (req.getObjVal? "_runtime").toOption.getD (Json.mkObj []), traceLog }
 
 /-- Every interpreter entry consumes permission from the current request. -/
 structure EffectPermission (ctx : ExecutionContext) (name : String) : Type where
@@ -118,9 +128,16 @@ def requireEffect (ctx : ExecutionContext) (name : String) : IO (EffectPermissio
   else throw (IO.userError s!"organization permission denied: {name}")
 
 instance instExecutionTrace : Handler Trace.Trace Execution where
-  handle request := fun ctx => do
-    let _permission ← requireEffect ctx "Trace"
-    Handler.handle (m := IO) request
+  handle
+    | .trace message => fun ctx => do
+      let _permission ← requireEffect ctx "Trace"
+      match ctx.traceLog with
+      | none => IO.eprintln message
+      | some log =>
+        let previous ← log.get
+        let value := previous.value ++ message ++ "\n"
+        if h : value.utf8ByteSize ≤ 1024 * 1024 then log.set ⟨value, h⟩
+        else throw (IO.userError "Trace: per-request log exceeds 1 MiB")
 
 instance instExecutionError {ε : Type} [ToString ε] : Handler (Error.Error ε) Execution where
   handle request := fun ctx => do
@@ -1744,8 +1761,8 @@ def GraphImpl.nodesJson (d : GraphImpl) (st : SessionState) (is : List Nat) : Js
     started with every input (a missing one fed an error) and its every node,
     in order, with its `output`, its own `error`, or the node it was `skipped`
     because of: its first argument without a value. -/
-def runGraph (d : GraphImpl) (req : Json) : IO (Except String Json) := do
-  let ctx ← match ExecutionContext.ofRequest req with | .ok c => pure c | .error e => return .error e
+def runGraph (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+  let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
   let d := d.withContext ctx
   let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
   let fed ← match d.inputNames.mapM (fun name => do
@@ -1761,8 +1778,8 @@ def runGraph (d : GraphImpl) (req : Json) : IO (Except String Json) := do
 /-- Start a session: `{"inputs": {…}}` (optional; inputs not given are not fed,
     so what depends on them has no outcome yet). The answer: the state, and
     every node. -/
-def sessionStart (d : GraphImpl) (req : Json) : IO (Except String Json) := do
-  let ctx ← match ExecutionContext.ofRequest req with | .ok c => pure c | .error e => return .error e
+def sessionStart (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+  let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
   let d := d.withContext ctx
   let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
   let recover := (req.getObjValAs? Bool "recoverInputs").toOption == some true
@@ -1777,8 +1794,8 @@ def sessionStart (d : GraphImpl) (req : Json) : IO (Except String Json) := do
     Several inputs are fed in order, at one instant of the session's clock: a
     function reading two of them may run for the intermediate state too; only the
     final outcomes are reported. -/
-def sessionUpdate (d : GraphImpl) (req : Json) : IO (Except String Json) := do
-  let ctx ← match ExecutionContext.ofRequest req with | .ok c => pure c | .error e => return .error e
+def sessionUpdate (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+  let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
   let d := d.withContext ctx
   match (req.getObjVal? "state" >>= SessionState.ofJson d),
       d.occurrencesOf ((req.getObjVal? "inputs").toOption.getD .null) with
@@ -1839,8 +1856,8 @@ def FunctionImpl.run (c : FunctionImpl) (input : Option Json) (ctx : ExecutionCo
 
 /-- A function request: `{"input": x}` (one call; omitted for a function of no
     inputs) or `{"inputs": [x₁, x₂, …]}` (one call per element). -/
-def runFunction (c : FunctionImpl) (req : Json) : IO (Except String Json) := do
-  let ctx ← match ExecutionContext.ofRequest req with | .ok c => pure c | .error e => return .error e
+def runFunction (c : FunctionImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+  let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
   match req.getObjVal? "inputs" with
   | .ok (.arr xs) =>
     let outs ← xs.mapM fun x => outcomeJson <$> c.run (some x) ctx
@@ -1849,6 +1866,68 @@ def runFunction (c : FunctionImpl) (req : Json) : IO (Except String Json) := do
   | .error _ =>
     let input := (req.getObjVal? "input").toOption
     pure (.ok (outcomeJson (← c.run input ctx)))
+
+/-- Dispatch using immutable checked graph templates. Context and session state
+    are taken exclusively from this request; withContext returns a fresh graph. -/
+def runCommand (functions : List FunctionImpl) (graphs : List (String × Except String GraphImpl))
+    (kind name : String) (req : Json) (log : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+  if kind == "function" then
+    match functions.find? (·.name == name) with
+    | none => return .error s!"no function named '{name}'"
+    | some c => return ← runFunction c req log
+  match graphs.lookup name with
+  | none => return .error s!"no graph named '{name}'"
+  | some (.error e) => return .error s!"graph '{name}': {e}"
+  | some (.ok d) =>
+    match kind with
+    | "graph" => runGraph d req log
+    | "session-start" => sessionStart d req log
+    | "session-update" => sessionUpdate d req log
+    | _ => return .error s!"unknown command '{kind}'"
+
+/-- Kill this worker's whole process group if its parent stops refreshing the
+    private lease. This also works for abrupt parent death and blocked effects. -/
+def superviseParent (leaseFile : String) : IO Unit := do
+  repeat
+    IO.sleep 1000
+    let healthy ← try
+      let text ← IO.FS.readFile leaseFile
+      let now ← IO.monoMsNow
+      pure (text.toNat?.map (fun t => decide (now - t < 5000)) |>.getD false)
+    catch _ => pure false
+    unless healthy do
+      let _ ← System.Process.run "sh" #["-c", "kill -s KILL -- \"-$PPID\""] 1000
+      IO.Process.exit 0
+
+/-- Multiple compact JSON frames on stdin/stdout. A response has its own status
+    and bounded request-local log; stderr is not a shared log transport. -/
+def workerMain (functions : List FunctionImpl) (graphs : List (String × Except String GraphImpl))
+    (leaseFile : String) : IO UInt32 := do
+  let _ ← IO.asTask (prio := .dedicated) (superviseParent leaseFile)
+  let stdin ← IO.getStdin
+  let stdout ← IO.getStdout
+  repeat
+    let text ← stdin.getLine
+    if text.isEmpty then break
+    unless text.utf8ByteSize ≤ 64 * 1024 * 1024 + 1 do
+      throw (IO.userError "worker request exceeds 64 MiB")
+    let log ← IO.mkRef emptyTrace
+    let id := ((Json.parse text).toOption.bind fun j => (j.getObjValAs? Nat "id").toOption).getD 0
+    let result ← try
+      match Json.parse text >>= fun j => do
+        let j ← j.getObjVal? "call"
+        return (← j.getObjValAs? String "kind", ← j.getObjValAs? String "name", ← j.getObjVal? "request") with
+      | .error e => pure (.error e)
+      | .ok (kind, name, req) => runCommand functions graphs kind name req (some log)
+    catch e => pure (.error (toString e))
+    let (status, body) := match result with
+      | .ok j => (200, j)
+      | .error e => (400, Json.mkObj [("error", Json.str e)])
+    let trace := (← log.get).value.trimAscii.toString
+    let body := if trace.isEmpty then body else body.setObjVal! "log" (Json.str trace)
+    stdout.putStrLn (Json.mkObj [("id", toJson id), ("status", toJson status), ("body", body)]).compress
+    stdout.flush
+  return 0
 
 /-- The driver's protocol. One JSON request on stdin, one JSON response on
     stdout; functions' traces go to stderr.
@@ -1874,6 +1953,7 @@ def driverMain (functions : List FunctionImpl) (graphs : List (String × Except 
     let text ← (← IO.getStdin).readToEnd
     pure (if text.trimAscii.isEmpty then .ok (Json.mkObj []) else Json.parse text)
   match args with
+  | ["worker", leaseFile] => workerMain functions graphs leaseFile
   | ["describe"] =>
     match graphs.findSome? fun (name, d) => (GraphImpl.error? d).map (name, ·) with
     | some (name, e) => respond (.error s!"graph '{name}': {e}")
@@ -1893,8 +1973,8 @@ def driverMain (functions : List FunctionImpl) (graphs : List (String × Except 
       | .ok req => respond (← runGraph d req)
   | [command, name] =>
     let run? : Option (GraphImpl → Json → IO (Except String Json)) := match command with
-      | "session-start" => some sessionStart
-      | "session-update" => some sessionUpdate
+      | "session-start" => some (fun d req => sessionStart d req)
+      | "session-update" => some (fun d req => sessionUpdate d req)
       | _ => none
     match run?, graphs.lookup name with
     | none, _ => IO.eprintln s!"unknown command '{command}'"; pure 2

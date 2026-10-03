@@ -27,6 +27,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT.parent / "liaison/LiaisonTest/integration"))
 spec = importlib.util.spec_from_file_location("broker_checks", ROOT.parent / "liaison/LiaisonTest/integration/connectors.py")
 broker_checks = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(broker_checks)

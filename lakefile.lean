@@ -6,7 +6,8 @@ open System Lake DSL
 -- `liaison` it needs no extra link arguments: Lean's toolchain links OpenSSL
 -- statically into every executable already.
 
-require linen from git "https://github.com/typednotes/linen" @ "v1.10.0"
+-- System.Worker is supplied by the immutable, coordinated Linen release.
+require linen from git "https://github.com/typednotes/linen" @ "v1.11.0"
 
 -- For `Liaison.Wire` only: liaison's wire format (`POST /v0/egress`), the
 -- module liaison's own server parses with. It is pure and imports none of
@@ -14,7 +15,7 @@ require linen from git "https://github.com/typednotes/linen" @ "v1.10.0"
 require liaison from git "https://github.com/typednotes/liaison" @ "v0.6.0"
 
 package lun where
-  version := v!"0.3.1"
+  version := v!"0.3.2"
   testDriver := "LunTest"
 
 -- The driver runtime, embedded in `Lun.Driver` with `include_str`. Lake does

@@ -68,10 +68,30 @@ are service configuration injected into private driver stdin by `Builder.call`;
 the caller cannot replace them. Driver/build processes have service credentials
 removed from their environment. `_runtime` is never persisted or returned.
 
-Ready artifacts must attest `runtimeContract: "bounded-eff-v1"`. The server
+Ready artifacts must attest `runtimeContract: "bounded-eff-worker-v2"`. The server
 consumes a `BoundedRuntime` witness before invoking a driver. Older cached
 executables are refused with 409 and resubmission rebuilds them, so deploying
 the new server cannot silently retain a legacy unbounded effect interpreter.
+
+## Loaded graph/process cache (local Lun 0.3.2)
+
+`WorkerCache` has a fixed-size Vector indexed by `Fin capacity.count`, with
+`Capacity.bounded` and `slots_bounded` proving the 16-worker ceiling. A private
+request carries equality between its payload and build/entry point/org/user/graph/
+schema key; acquisition returns an actor-matching private lease. Response ID
+equality is checked before results are consumed. Cache entries contain only this
+identity key, a process and its busy flag. Each frame binds fresh context,
+permissions, warrants and a private byte-bounded Trace buffer; graphs are immutable
+templates and session state still travels explicitly in requests/responses.
+
+Queue/write/read deadlines, failed-worker retirement, no automatic effect replay,
+idle replacement and a private parent heartbeat bound the new execution path.
+Pipe/process/mutex semantics and correspondence between the generated protocol
+and the proved metadata remain trusted, exercised with real-process and compiled
+runtime fixtures. See [release preparation](release-0.3.2.md) for the exact Linen
+dependency lock/publication order and [throughput](throughput.md) for measurements.
+
+## Native connector envelopes
 
 Every cell's `connectors` array contains records with these mandatory fields
 (the current app wire shape):

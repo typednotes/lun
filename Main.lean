@@ -18,6 +18,7 @@ def secondsEnv (name : String) (default : Nat) : IO Nat := do
     - `LUN_BUILD_TIMEOUT`, `LUN_FETCH_TIMEOUT`, `LUN_CALL_TIMEOUT` —
       seconds; defaults `3600`, `600`, `60`;
     - `LUN_PACKAGE_CACHE` — pre-built packages (`{cache}/linen/{rev}`);
+    - `LUN_WORKERS` — maximum loaded driver workers, default 4, range 1–16;
     - `LUN_ID_SALT` — salt for build ids; random per process if unset (ids
       then change across restarts, and builds are redone);
     - `LUN_ALLOW_LOCAL=1` — local mode: `file://` repositories and path
@@ -34,6 +35,12 @@ def main : IO Unit := do
   let liaisonSdkPath ← if allowLocal then do
     pure ((← IO.getEnv "LUN_LIAISON_SDK_PATH").map System.FilePath.mk)
     else pure none
+  let workerCount ← match ← IO.getEnv "LUN_WORKERS" with
+    | none => pure 4
+    | some value => match value.toNat? with
+      | some n => pure n
+      | none => throw (IO.userError "LUN_WORKERS must be an integer from 1 to 16")
+  let workerCapacity ← IO.ofExcept ((Lun.WorkerCache.Capacity.check workerCount).mapError IO.userError)
   let cfg : Lun.Config :=
     { workdir := workdir
       liaisonUrl := ← IO.getEnv "LUN_LIAISON_URL"
@@ -41,6 +48,7 @@ def main : IO Unit := do
       buildTimeoutMs := ← secondsEnv "LUN_BUILD_TIMEOUT" 3600
       fetchTimeoutMs := ← secondsEnv "LUN_FETCH_TIMEOUT" 600
       callTimeoutMs := ← secondsEnv "LUN_CALL_TIMEOUT" 60
+      workerCapacity
       packageCache := (← IO.getEnv "LUN_PACKAGE_CACHE").map System.FilePath.mk
       allowLocal
       liaisonSdkPath
@@ -50,4 +58,5 @@ def main : IO Unit := do
   if allowLocal then IO.eprintln "lun: LOCAL MODE — file:// repositories and path dependencies accepted"
   if cfg.token.isNone then IO.eprintln "lun: LUN_TOKEN is not set — the API is unauthenticated"
   IO.println s!"lun listening on :{port}"
-  Network.WebApp.Server.run port (Lun.application builder (← Lun.Sessions.new))
+  try Network.WebApp.Server.run port (Lun.application builder (← Lun.Sessions.new))
+  finally builder.workers.close

@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-10-03T05:46:10.061879+00:00",
+  "host": "macOS-26.6.2-arm64-arm-64bit",
+  "cpu_count": 16,
+  "runner_commit": "c1c6ee9cf4fe61d3ea8c876092b4863d6afbab29",
+  "compile_seconds_excluded": 27.40308433305472,
+  "warmup_requests_excluded": 20,
+  "graph": "Nat + Nat -> Eff [] Nat",
+  "rows": [
+    {"mode":"graph","concurrency":1,"requests":300,"seconds":46.10670529212803,"qps":6.506645792607093,"p50_ms":157.847541,"p95_ms":164.638167,"p99_ms":166.852875,"errors":0},
+    {"mode":"graph","concurrency":4,"requests":300,"seconds":34.39918087492697,"qps":8.721137898334822,"p50_ms":346.59575,"p95_ms":1041.85325,"p99_ms":1597.682583,"errors":0},
+    {"mode":"graph","concurrency":8,"requests":300,"seconds":34.546544125070795,"qps":8.683936630937472,"p50_ms":480.124292,"p95_ms":2656.429166,"p99_ms":4040.964958,"errors":0},
+    {"mode":"session","concurrency":1,"requests":300,"seconds":47.17407820886001,"qps":6.359424738979964,"p50_ms":159.351792,"p95_ms":165.583667,"p99_ms":167.741083,"errors":0},
+    {"mode":"session","concurrency":4,"requests":300,"seconds":35.56555241695605,"qps":8.43512836474244,"p50_ms":346.31975,"p95_ms":1149.708458,"p99_ms":1938.240917,"errors":0},
+    {"mode":"session","concurrency":8,"requests":300,"seconds":35.74779833294451,"qps":8.392125221416098,"p50_ms":565.889125,"p95_ms":2300.300083,"p99_ms":3744.53825,"errors":0}
+  ],
+  "method": "Local HTTP with per-worker HTTPConnection objects (automatic reconnect if server closes); session rows include setup/teardown overhead in QPS denominator; latencies cover only evaluated requests; all results validated."
+}

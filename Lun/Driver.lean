@@ -32,7 +32,7 @@ def runtimeSource : String := include_str "../template/LunDriver/Runtime.lean"
 def temporarySource : String := include_str "../template/LunDriver/temporary.py"
 
 /-- Cached drivers from before bounded execution must never receive calls. -/
-def runtimeContract : String := "bounded-eff-v1"
+def runtimeContract : String := "bounded-eff-worker-v2"
 
 /-- What a driver is generated from. -/
 structure Input where
