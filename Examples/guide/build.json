@@ -1,0 +1,27 @@
+{
+  "source": {"directory": "/absolute/path/to/Examples/guide/project"},
+  "functions": [
+    {"name": "double", "module": "Tutorial", "function": "Tutorial.double", "signature": "Nat → Eff [] Nat", "outputType": "Nat"},
+    {"name": "add", "module": "Tutorial", "function": "Tutorial.add", "signature": "Nat → Nat → Eff [Trace.Trace] Nat", "outputType": "Nat"},
+    {"name": "seed", "module": "Tutorial", "function": "Tutorial.seed", "signature": "Unit → Eff [] Nat", "outputType": "Nat"},
+    {"name": "succ", "module": "Tutorial", "function": "Tutorial.succ", "signature": "Nat → Eff [] Nat", "outputType": "Nat"},
+    {"name": "render", "module": "Tutorial", "function": "Tutorial.render", "signature": "Nat → Eff [] String", "outputType": "String"},
+    {"name": "greet", "module": "Tutorial", "function": "Tutorial.greet", "signature": "String → Eff [] String", "outputType": "String"},
+    {"name": "sum", "module": "Tutorial", "function": "Tutorial.sum", "signature": "List Nat → Eff [] Nat", "outputType": "Nat"},
+    {"name": "norm1", "module": "Tutorial", "function": "Tutorial.norm1", "signature": "Tutorial.Point → Eff [Error.Error String] Nat", "outputType": "Nat"},
+    {"name": "cap", "module": "Tutorial", "function": "Tutorial.cap", "signature": "Nat → Eff [Trace.Trace] Nat", "outputType": "Nat"},
+    {"name": "writeRead", "module": "Tutorial", "function": "Tutorial.writeRead", "signature": "String → Eff [FileSystem.FileSystem Tutorial.files] String", "outputType": "String"},
+    {"name": "readNote", "module": "Tutorial", "function": "Tutorial.readNote", "signature": "Unit → Eff [FileSystem.FileSystem Tutorial.files] String", "outputType": "String"},
+    {"name": "fetch", "module": "Tutorial", "function": "Tutorial.fetch", "signature": "Unit → Eff [HTTP.HTTP Tutorial.web] Nat", "outputType": "Nat"},
+    {"name": "report", "module": "Tutorial", "function": "Tutorial.report", "signature": "List String → Eff [Connector.Connector Tutorial.storage] Lean.Json", "outputType": "Lean.Json"},
+    {"name": "delayed", "module": "Tutorial", "function": "Tutorial.delayed", "signature": "Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)", "producer": true, "outputType": "Nat"}
+  ],
+  "graphs": [
+    {"name": "parallel", "program": "do\n  let n ← input \"n\" Nat\n  let name ← input \"name\" String\n  let doubled ← double n\n  let _ ← render doubled\n  greet name", "inputTypes": {"n": "Nat", "name": "String"}, "dependencies": {"double": ["n"], "render": ["double"], "greet": ["name"]}},
+    {"name": "seeded", "program": "do\n  let x ← input \"x\" Nat\n  let s ← seed\n  let d ← double x\n  let a ← add d s\n  render a", "inputTypes": {"x": "Nat"}, "dependencies": {"seed": [], "double": ["x"], "add": ["double", "seed"], "render": ["add"]}},
+    {"name": "diamond", "program": "do\n  let x ← input \"x\" Nat\n  let root ← double x\n  let left ← succ root\n  let right ← double root\n  let joined ← add left right\n  render joined", "inputTypes": {"x": "Nat"}},
+    {"name": "errors", "program": "do\n  let p ← input \"p\" Tutorial.Point\n  let y ← input \"y\" Nat\n  let n ← norm1 p\n  let a ← add n y\n  let _ ← render a\n  double y", "inputTypes": {"p": "Tutorial.Point", "y": "Nat"}, "dependencies": {"norm1": ["p"], "add": ["norm1", "y"], "render": ["add"], "double": ["y"]}},
+    {"name": "capped", "program": "do\n  let x ← input \"x\" Nat\n  cap x", "inputTypes": {"x": "Nat"}, "dependencies": {"cap": ["x"]}},
+    {"name": "timed", "program": "do\n  let n ← input \"n\" Nat\n  let value ← delayed n\n  render value", "inputTypes": {"n": "Nat"}, "dependencies": {"delayed": ["n"], "render": ["delayed"]}}
+  ]
+}

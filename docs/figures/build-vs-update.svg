@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 460" role="img" aria-labelledby="title desc">
+  <title id="title">Changing a build specification and changing a graph input are different operations</title>
+  <desc id="desc">Editing code creates build B while build A remains available. Supplying previous state and changed inputs uses the warm compiled build A, evaluates affected nodes, and returns changes, new state and a wake-up timestamp.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#6b756f" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="460" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">Two different kinds of change.</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">Graph evaluation is incremental. Compilation across different build ids is currently mostly fresh.</text>
+    <text x="40" y="122" font-size="12" font-weight="700" fill="#56655d">CHANGE THE PROGRAM</text>
+    <g data-card="spec"><rect x="40" y="140" width="280" height="92" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="60" y="174" font-size="19" font-weight="700">Edit code or declarations</text><text x="60" y="206" font-size="15">Submit another build request.</text></g>
+    <g data-card="compile"><rect x="420" y="140" width="280" height="92" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="440" y="174" font-size="19" font-weight="700">Check and compile</text><text x="440" y="206" font-size="15">Reuse compatible dependencies.</text></g>
+    <g data-card="version"><rect x="800" y="140" width="280" height="92" rx="9" fill="#22312a"/><text x="820" y="174" font-size="19" font-weight="700" fill="#fff">New build B</text><text x="820" y="206" font-size="15" fill="#cbd9ca">Existing build A stays available.</text></g>
+    <text x="40" y="291" font-size="12" font-weight="700" fill="#507346">CHANGE ONLY THE DATA</text>
+    <g data-card="input"><rect x="40" y="309" width="280" height="92" rx="9" fill="#e8f0e5" stroke="#aebfa8"/><text x="60" y="343" font-size="19" font-weight="700">Supply state + changed input</text><text x="60" y="375" font-size="15" font-family="monospace">{"state":…,"inputs":{"n":8}}</text></g>
+    <g data-card="evaluate"><rect x="420" y="309" width="280" height="92" rx="9" fill="#e8f0e5" stroke="#aebfa8"/><text x="440" y="343" font-size="19" font-weight="700">Evaluate affected nodes</text><text x="440" y="375" font-size="15">Use the same compiled build A.</text></g>
+    <g data-card="delta"><rect x="800" y="309" width="280" height="92" rx="9" fill="#e8f0e5" stroke="#aebfa8"/><text x="820" y="343" font-size="19" font-weight="700">Return changed outcomes</text><text x="820" y="375" font-size="15">No Lean compilation.</text></g>
+    <g fill="none" stroke="#6b756f" stroke-width="2" marker-end="url(#arrow)"><path d="M322 186 H416"/><path d="M702 186 H796"/><path d="M322 355 H416"/><path d="M702 355 H796"/></g>
+  </g>
+</svg>

@@ -1,5 +1,9 @@
 # Arithmetic graph benchmark: compiled process cache
 
+The before/after sections below are historical (before `stateless-producers-v4`
+replaced the session API). The current harness compares fresh `graph` calls with
+`stateful` calls carrying caller-owned state; it also checks warm-worker lifecycle behavior.
+
 Measured on 2026-10-03, macOS arm64, 16 logical CPUs, for
 `Nat + Nat → Eff [] Nat`. Each run has 300 calls per mode/concurrency,
 1,800 validated outputs total and zero errors. These are complete local HTTP
@@ -37,14 +41,42 @@ its low median; it is not a steady-state scaling curve. Session QPS includes
 setup/deletion, whereas latency samples cover only evaluated updates. Each client
 uses an independent session and an HTTPConnection object which reconnects if needed.
 
+## Current: stateless graph steps with caller-owned state
+
+Measured on 2026-10-04 on the same macOS arm64 host, with four workers and
+`stateless-producers-v4`. Each mode/concurrency has 100 validated calls;
+400 measured results pass with zero errors. Compilation (23.58 s) and 20
+sequential warm-up calls are excluded. The artifact records the dirty working
+tree and exact runtime source hashes, rather than claiming a published release.
+[Raw stateless result](../test/benchmark-stateless-results-20261004.json).
+
+- Fresh graph calls, concurrency 1: median **1.54 ms**, p95 **1.63 ms**,
+  **647.57 QPS**.
+- Calls carrying caller-owned JSON state, concurrency 1: median **1.54 ms**,
+  p95 **1.62 ms**, **638.91 QPS**.
+- Caller-state calls, concurrency 4: median **1.57 ms**, p95 **1.80 ms**,
+  **2,368.28 QPS** after the worker pool has warmed.
+
+The fresh graph/concurrency-4 series includes cold starts for additional workers:
+its median is 1.52 ms, but p99 is 287.80 ms and aggregate throughput is
+226.77 QPS. Those cold starts remain in the data. Each caller owns an independent
+state object; no execution records or session files are written by Lun. The run
+also passes the abrupt-parent worker cleanup assertion.
+
+Reproduce this smaller current run with:
+
+```sh
+uv run test/benchmark.py --temp-root /approved/scratch --requests 100 --concurrency 1 4 --worker-count 4
+```
+
 ## Reproduce and lifecycle checks
 
 ```sh
-python3 test/benchmark.py --temp-root /approved/scratch --requests 300 --worker-count 4
+uv run test/benchmark.py --temp-root /approved/scratch --requests 300 --worker-count 4
 ```
 
 The script verifies every arithmetic result and asserts that driver workers stop
 after terminating their parent runner. The final run passed that abrupt-parent
 cleanup check. Lean and real compiled fixtures additionally verify bounded
 framing/correlation, actor separation, fresh authority/trace context, timeout
-retirement and no effect replay. [Cache contracts and release dependency](release-0.3.2.md).
+retirement and no effect replay. [Cache contracts and release dependency](release-0.4.0.md).

@@ -1,10 +1,16 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+
 """Compiled lun drivers + actual liaison/HMAC/ledger + private SCRAM Postgres.
 
 The vault/provider HTTP fixtures are disposable protocol peers, not substitutes
 for the runtime/broker. No paid endpoint or personal credential is used.
 """
 import argparse
+from contextlib import nullcontext
 import copy
 import hashlib
 import hmac
@@ -117,14 +123,23 @@ def wait_health(base, process, logfile):
 def main():
     args = argparse.ArgumentParser()
     args.add_argument("--temp-root", type=Path, required=True)
+    args.add_argument("--build-timeout", type=int, default=240,
+                      help="native fixture compilation deadline in seconds")
+    args.add_argument("--keep-temp", action="store_true", help="retain build artifacts for diagnostics")
     args.add_argument("--public-http", action="store_true", help="verify credential-free TLS GET to example.org")
     options = args.parse_args()
+    if options.build_timeout <= 0:
+        args.error("--build-timeout must be positive")
     vault, upstream = serve(True), serve(False)
     processes = []
     pg_started = False
     checks = 0
-    with tempfile.TemporaryDirectory(prefix="lun-runtime-", dir=options.temp_root) as temp:
+    sandbox = (nullcontext(tempfile.mkdtemp(prefix="lun-runtime-", dir=options.temp_root))
+               if options.keep_temp else tempfile.TemporaryDirectory(prefix="lun-runtime-", dir=options.temp_root))
+    with sandbox as temp:
         directory = Path(temp)
+        if options.keep_temp:
+            print(f"Artifacts: {directory}", flush=True)
         pg = directory / "postgres"
         pg_port, broker_port, lun_port = port(), port(), port()
         org, user, graph, run_id = str(uuid.uuid4()), "fixture-user", "fixture-graph", str(uuid.uuid4())
@@ -146,7 +161,7 @@ def main():
             env.update(SECRETS_HOST="127.0.0.1", SECRETS_PORT=str(vault.server_port), SECRETS_INSECURE="1", SECRETS_TOKEN="fixture-vault", LEAN_NUM_THREADS="2")
             for binary, settings, name in (
                 (ROOT.parent / "liaison/.lake/build/bin/liaison", dict(LIAISON_ROOT_KEY=key.hex(), DATABASE_URL=db, LIAISON_PORT=str(broker_port)), "broker"),
-                (ROOT / ".lake/build/bin/lun", dict(LUN_PORT=str(lun_port), LUN_TOKEN="fixture-lun", LUN_WORKDIR=str(directory / "lun"), LUN_ALLOW_LOCAL="1", LUN_BUILD_TIMEOUT="240", LUN_LIAISON_SDK_PATH=str(ROOT.parent / "liaison"), LUN_LIAISON_URL=f"http://127.0.0.1:{broker_port}", LUN_TEMP_ROOT=str(directory / "temporary")), "lun")):
+                (ROOT / ".lake/build/bin/lun", dict(LUN_PORT=str(lun_port), LUN_TOKEN="fixture-lun", LUN_WORKDIR=str(directory / "lun"), LUN_ALLOW_LOCAL="1", LUN_BUILD_TIMEOUT=str(options.build_timeout), LUN_LIAISON_SDK_PATH=str(ROOT.parent / "liaison"), LUN_LIAISON_URL=f"http://127.0.0.1:{broker_port}", LUN_TEMP_ROOT=str(directory / "temporary")), "lun")):
                 logfile = directory / f"{name}.log"
                 log = logfile.open("w")
                 proc = subprocess.Popen([str(binary)], env=dict(env, **settings), stdout=log, stderr=log)
@@ -189,7 +204,7 @@ def main():
             status, submitted = exchange(base + "/v0/builds", request)
             assert status == 202, submitted
             build = submitted["id"]
-            for _ in range(1500):
+            for _ in range(5 * (options.build_timeout + 60)):
                 _, description = exchange(base + f"/v0/builds/{build}")
                 if description["state"] in ("ready", "failed"):
                     break
@@ -260,6 +275,21 @@ def main():
             denied = subprocess.run(["psql", f"postgresql://compute_owner:{password}@127.0.0.1:{pg_port}/postgres", "-X", "-c", "select * from other_user.notes"], capture_output=True, text=True)
             assert denied.returncode != 0 and "permission denied" in denied.stderr
             call("readSecret", "SecretStore", secret_grant, expected="graph-value")
+            # Logical project names keep their old protected physical namespace
+            # after merging. Request metadata is never the routing authority.
+            alias_graph="merged-origin";physical=f"/v1/secret/data/graph/{org}/{alias_graph}/old-token"
+            original_secret=vault.state["documents"].pop(secret_path)
+            vault.state["documents"][physical]=copy.deepcopy(original_secret)
+            changed=[]
+            for token in secret_grant["warrants"]:
+                path=f"/v1/secret/data/connector-authority/{org}/{run_id}/{token['warrant']['id']}"
+                saved=copy.deepcopy(vault.state["documents"][path]);changed.append((path,saved))
+                vault.state["documents"][path]["routes"]=[dict(logical=["token"],namespace=alias_graph,physical=["old-token"])]
+            call("readSecret","SecretStore",secret_grant,expected="graph-value")
+            call("readSecret","SecretStore",secret_grant,expected="graph-value",mutate=lambda body:body.update(routes=[dict(logical=["token"],namespace="foreign",physical=["operator-key"])]))
+            for path,saved in changed:vault.state["documents"][path]=saved
+            vault.state["documents"][secret_path]=original_secret
+            vault.state["documents"].pop(physical)
             call("putSecret", "SecretStore", secret_grant, "new-value", expected=True)
             assert vault.state["documents"][secret_path]["value"] == "new-value"
             call("describeSecret", "SecretStore", secret_grant, expected=True)
@@ -377,48 +407,49 @@ def main():
             if options.public_http:
                 call("fetch", "HTTP", mutate=lambda b: b["policy"].update(domains=["example.org"]), expected=200)
             typed = dict(inputs={"x": 3}, policy=dict(effects=["Trace"], domains=[]), binding=binding())
-            status, session = exchange(base + f"/v0/builds/{build}/graphs/typed/sessions", typed)
-            assert status == 201 and session["nodes"][-1]["output"] == 4, session
-            endpoint = base + "/v0/sessions/" + session["session"]
-            status, refused = exchange(endpoint, dict(inputs={"x": "bad"}))
+            endpoint = base + f"/v0/builds/{build}/graphs/typed"
+            status, snapshot = exchange(endpoint, typed)
+            assert status == 200 and snapshot["nodes"][-1]["output"] == 4, snapshot
+            status, refused = exchange(endpoint, dict(typed, state=snapshot["state"], inputs={"x": "bad"}))
             assert status == 400 and "configured type" in refused["error"]
-            _, unchanged = exchange(endpoint)
-            assert unchanged["updates"] == 0 and unchanged["nodes"][-1]["output"] == 4
-            status, narrowed = exchange(endpoint, dict(inputs={"x": 4}, policy=dict(effects=[], domains=[])))
+            _, unchanged = exchange(endpoint, dict(typed, state=snapshot["state"], inputs={}))
+            assert unchanged["changed"] == [] and unchanged["nodes"][-1]["output"] == 4
+            status, narrowed = exchange(endpoint, dict(typed, state=snapshot["state"], inputs={"x": 4}, policy=dict(effects=[], domains=[])))
             assert status == 200 and "permission denied" in narrowed["changed"][-1]["error"]
-            status, refused = exchange(endpoint, dict(inputs={"x": 5}, policy=dict(effects=["Trace"], domains=[])))
-            assert status == 403
+            status, restored = exchange(endpoint, dict(typed, state=narrowed["state"], inputs={"x": 5}))
+            assert status == 200 and restored["nodes"][-1]["output"] == 6
             checks += 5
-            status, recovered = exchange(base + f"/v0/builds/{build}/graphs/typed/sessions",
+            status, recovered = exchange(endpoint,
                 dict(typed, inputs={"x": "historic incompatible value"}, recoverInputs=True))
-            assert status == 201 and "configured type" in recovered["nodes"][0]["error"] and "skipped" in recovered["nodes"][1]
+            assert status == 200 and "configured type" in recovered["nodes"][0]["error"] and "skipped" in recovered["nodes"][1]
             assert "typed source evaluated" not in recovered.get("log", "")
-            status, fixed = exchange(base + "/v0/sessions/" + recovered["session"], dict(inputs={"x": 8}))
+            status, fixed = exchange(endpoint, dict(typed, state=recovered["state"], inputs={"x": 8}))
             assert status == 200 and fixed["nodes"][-1]["output"] == 9
             checks += 2
-            # Session refresh consumes the current public ceilings, with the
-            # current app's absent warrantPermissions field and fresh tokens.
+            # Every stateless call consumes fresh app-owned ceilings and tokens;
+            # neither prior grants nor credentials live in the graph state.
             connected = dict(inputs={"selector": ["reports", "file"]}, policy=dict(effects=["Connector"], domains=[]),
                 binding=binding(), connectors={"relayAt": [relay_grant]})
-            status, session = exchange(base + f"/v0/builds/{build}/graphs/connected/sessions", connected)
-            assert status == 201 and session["nodes"][-1]["output"]["body"] == dict(native=True), session
-            persisted = (directory / f"lun/sessions/{session['session']}.json").read_text()
+            endpoint = base + f"/v0/builds/{build}/graphs/connected"
+            status, snapshot = exchange(endpoint, connected)
+            assert status == 200 and snapshot["nodes"][-1]["output"]["body"] == dict(native=True), snapshot
+            persisted = json.dumps(snapshot["state"])
             assert '"tag"' not in persisted and '"warrants"' not in persisted and "fixture-vault" not in persisted
-            endpoint = base + "/v0/sessions/" + session["session"]
             narrow_relay = copy.deepcopy(relay_grant)
             for ceiling in ("organization", "connectionPermissions", "cell"):
                 narrow_relay[ceiling].update(scopes=[dict(operation="objects.read", root=["reports", "nested"], descendants=True)],
                     maxRequestBytes=1024, maxResponseBytes=1024)
-            status, reply = exchange(endpoint, dict(inputs={"selector": ["reports", "nested", "file"]}, connectors={"relayAt": [narrow_relay]}))
+            status, reply = exchange(endpoint, dict(connected, state=snapshot["state"], inputs={"selector": ["reports", "nested", "file"]}, connectors={"relayAt": [narrow_relay]}))
             assert status == 200 and reply["nodes"][-1]["output"]["body"] == dict(native=True), reply
             before = len(upstream.state["calls"])
-            status, refused = exchange(endpoint, dict(inputs={"selector": ["reports", "file"]}, connectors={"relayAt": [relay_grant]}))
-            assert status == 403 and len(upstream.state["calls"]) == before, refused
-            status, denied = exchange(endpoint, dict(inputs={"selector": ["reports", "nested", "other-file"]}))
+            status, refused = exchange(endpoint, dict(connected, state=reply["state"], inputs={"selector": ["reports", "file"]}, connectors={"relayAt": [narrow_relay]}))
+            assert status == 200 and "error" in refused["nodes"][-1] and len(upstream.state["calls"]) == before, refused
+            status, denied = exchange(endpoint, dict(connected, state=reply["state"], inputs={"selector": ["reports", "nested", "other-file"]}, connectors={}))
             assert status == 200 and "grant" in denied["nodes"][-1]["error"], denied
             assert len(upstream.state["calls"]) == before
-            status, refused = exchange(endpoint, dict(inputs={"selector": ["reports", "nested", "file"]}, connectors={"relayAt": [narrow_relay]}))
-            assert status == 403 and len(upstream.state["calls"]) == before, refused
+            status, restored = exchange(endpoint, dict(connected, state=denied["state"], inputs={"selector": ["reports", "nested", "file"]}, connectors={"relayAt": [narrow_relay]}))
+            assert status == 200 and restored["nodes"][-1]["output"]["body"] == dict(native=True), restored
+            assert not (directory / "lun/sessions").exists()
             checks += 5
             # Legacy ready artifacts cannot bypass the new interpreter via cache.
             status_file = directory / f"lun/builds/{build}/status.json"
@@ -433,7 +464,7 @@ def main():
             status_file.write_text(saved_status)
             checks += 1
             assert sql("select count(*) from credit_holds where state='held'") == "0"
-            print(f"PASS: {checks} compiled-driver runtime cases; actual SCRAM queries, vault effects, native HMAC broker, typed inputs and attenuation")
+            print(f"PASS: {checks} compiled-driver runtime cases; actual SCRAM queries, vault effects, native HMAC broker, typed inputs and fresh authority")
         finally:
             for proc, log in reversed(processes):
                 proc.terminate()

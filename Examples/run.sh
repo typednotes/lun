@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run lun's example locally: start a lun, have it build the pricing project
-# (`Examples/pricing`), register its `invoice` graph as a session and update
+# (`Examples/pricing`), execute its `invoice` graph with caller-owned state and update
 # its inputs (`Examples/Client.lean`).
 #
 #   Examples/run.sh [LINEN_DIR] [-- CLIENT OPTIONS…]

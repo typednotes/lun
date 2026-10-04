@@ -15,7 +15,7 @@ def body (org user graph : String) : Json := Json.mkObj [("binding", Json.mkObj
 #guard keyOf "build" "graph" "main" (body "org" "a" "g") != keyOf "build" "graph" "main" (body "org" "a" "other")
 #guard keyOf "build" "graph" "main" Json.null != keyOf "other" "graph" "main" Json.null
 #guard keyOf "build" "function" "main" Json.null != keyOf "build" "graph" "main" Json.null
-#guard keyOf "build" "graph" "main" Json.null == keyOf "build" "session-update" "main" Json.null
+#guard keyOf "build" "graph" "main" Json.null == keyOf "build" "graph" "main" (Json.mkObj [("state", Json.null)])
 #guard keyOf "build" "graph" "main" ((body "org" "a" "g").setObjVal! "_runtime" (Json.mkObj [("SECRETS_TOKEN", "private")])) == keyOf "build" "graph" "main" (body "org" "a" "g")
 #guard (Response.check 7 "{\"id\":7,\"status\":200,\"body\":{}}").isOk
 #guard (Response.check 8 "{\"id\":7,\"status\":200,\"body\":{}}").toOption.isNone
@@ -48,7 +48,10 @@ for text in sys.stdin:
     return ← cache.call request path.toString #[] deadline
   let pid (reply : Json) : Nat := (reply.getObjVal? "body" >>= (·.getObjValAs? Nat "pid")).toOption.getD 0
   try
+    let preloaded ← cache.preload "build" path.toString #[] 10000
+    check preloaded.isSome "compiled worker was not preloaded"
     let a ← call (body "org" "a" "g")
+    check (preloaded.map (·.toNat) == some (pid a)) "first actor did not acquire the already-loaded process"
     let b ← call ((body "org" "a" "g").setObjVal! "policy" (Json.mkObj [("effects", toJson ([] : List String))]))
     check (pid a > 0 && pid a == pid b) "same binding did not reuse the compiled process"
     check ((b.getObjVal? "body" >>= (·.getObjVal? "payload") >>= (·.getObjVal? "policy")).isOk) "fresh payload was lost"

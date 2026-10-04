@@ -64,6 +64,9 @@ structure Source where
   /-- The project directory within the repository (`""` for its root). -/
   path : String
   credentials : Option Credentials
+  /-- Local working-tree input, snapshotted before computing the build id.
+      When present, `repo` names the folder and branch/commit are unused. -/
+  directory : Option String := none
 
 /-- A function of the project, under a name and a declared signature. -/
 structure FunctionSpec where
@@ -73,6 +76,9 @@ structure FunctionSpec where
   signature : String
   /-- A user-owned output constraint, independent of the generated signature. -/
   outputType : Option String := none
+  /-- A resumable producer: arguments followed by `Nat → Option S → Eff effs
+      (List B × S × Option Nat)`. Its graph output is `B`. -/
+  producer : Bool := false
   deriving DecidableEq, Repr, Inhabited
 
 /-- A graph: a `Reactive` program over the functions. -/
@@ -137,17 +143,26 @@ private def parseCredentials (j : Json) (repo : System.Git.Repository) : Except 
   return { warrant, account }
 
 private def parseSource (j : Json) (allowLocal : Bool) : Except String Source := do
+  let path ← match optional j "path" with
+    | none => pure ""
+    | some (.str p) => pure p
+    | some _ => throw "source.path: must be a string"
+  check (Validate.projectPath path) "source.path: must be relative, of plain components"
+  if let some directory := optional j "directory" then
+    check allowLocal "source.directory: folders are only accepted in local mode"
+    let directory ← directory.getStr? |>.mapError (fun _ => "source.directory: must be a string")
+    check (Validate.localDirectory directory) "source.directory: must be an absolute folder path without dot segments"
+    for name in ["url", "branch", "commit", "credentials"] do
+      check ((optional j name).isNone) s!"source.directory: cannot be combined with {name}"
+    return { repo := { host := .local, segments := (directory.splitOn "/").drop 1,
+                       cloneUrl := "file://" ++ directory },
+             branch := "", commit := "", path, credentials := none, directory := some directory }
   let url ← string j "source" "url"
   let repo ← System.Git.Repository.parse url allowLocal |>.mapError ("source.url: " ++ ·)
   let branch ← string j "source" "branch"
   check (System.Git.isBranchName branch) "source.branch: not a valid branch name"
   let commit ← string j "source" "commit"
   check (Validate.commit commit) "source.commit: must be a full 40- or 64-digit lowercase hex object name"
-  let path ← match optional j "path" with
-    | none => pure ""
-    | some (.str p) => pure p
-    | some _ => throw "source.path: must be a string"
-  check (Validate.projectPath path) "source.path: must be relative, of plain components"
   let credentials ← (optional j "credentials").mapM (parseCredentials · repo)
   return { repo, branch, commit, path, credentials }
 
@@ -168,7 +183,11 @@ private def parseFunction (j : Json) (i : Nat) : Except String FunctionSpec := d
       check (Validate.leanText t (multiline := false) (maxLen := 512)) s!"{ctx}.outputType: must be one Lean type"
       pure (some t)
     | some _ => throw s!"{ctx}.outputType: must be a string"
-  return { name, module, function, signature, outputType }
+  let producer ← match optional j "producer" with
+    | none => pure false
+    | some (.bool value) => pure value
+    | some _ => throw s!"{ctx}.producer: must be a boolean"
+  return { name, module, function, signature, outputType, producer }
 
 private def parseGraph (j : Json) (i : Nat) : Except String GraphSpec := do
   let ctx := s!"graphs[{i}]"
@@ -204,7 +223,7 @@ def firstDuplicate : List String → Option String
   | x :: xs => if xs.contains x then some x else firstDuplicate xs
 
 /-- Parse and validate a build request. `allowLocal` admits `file://`
-    repositories (local mode, for tests). -/
+    repositories and working folders (local development). -/
 def BuildSpec.parse (j : Json) (allowLocal : Bool := false) : Except String BuildSpec := do
   let source ← parseSource (← field j "request" "source") allowLocal
   let opens ← (← array j "request" "open").mapM fun
@@ -229,12 +248,15 @@ def BuildSpec.parse (j : Json) (allowLocal : Bool := false) : Except String Buil
 def BuildSpec.canonical (s : BuildSpec) : Json :=
   Json.mkObj
     [ ("source", Json.mkObj
-        [ ("url", s.source.repo.cloneUrl), ("branch", s.source.branch)
-        , ("commit", s.source.commit), ("path", s.source.path) ])
+        (match s.source.directory with
+         | some directory => [("directory", Json.str directory), ("path", Json.str s.source.path)]
+         | none => [ ("url", s.source.repo.cloneUrl), ("branch", s.source.branch)
+                   , ("commit", s.source.commit), ("path", s.source.path) ]))
     , ("open", Json.arr (s.opens.map Json.str).toArray)
     , ("functions", Json.arr (s.functions.map fun c => Json.mkObj <|
         [ ("name", Json.str c.name), ("module", Json.str c.module), ("function", Json.str c.function)
-         , ("signature", Json.str c.signature) ] ++ (c.outputType.map fun t => [("outputType", Json.str t)]).getD []).toArray)
+         , ("signature", Json.str c.signature) ] ++ (c.outputType.map fun t => [("outputType", Json.str t)]).getD [] ++
+         (if c.producer then [("producer", Json.bool true)] else [])).toArray)
     , ("graphs", Json.arr (s.graphs.map fun d => Json.mkObj
           [("name", d.name), ("program", d.program), ("dependencies", Json.mkObj (d.dependencies.map fun (n, args) => (n, Lean.toJson args))),
            ("inputTypes", Json.mkObj (d.inputTypes.map fun (n, t) => (n, Json.str t)))]).toArray) ]

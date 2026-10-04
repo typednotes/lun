@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 410" role="img" aria-labelledby="title desc">
+  <title id="title">Lun: from a Lean project to a reusable compiled build</title>
+  <desc id="desc">A project and a build request are checked and compiled into a ready build. CLI or HTTP requests call functions or execute stateless graph steps with inputs and caller-owned JSON state.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#6b756f" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="410" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="48" font-size="28" font-weight="700">Build once. Call many times.</text>
+    <text x="40" y="79" font-size="16" fill="#56655d">Lean supplies the implementations. A request declares what Lun should expose.</text>
+    <g data-card="project">
+      <rect x="40" y="119" width="214" height="182" rx="10" fill="#fff" stroke="#d5ddd5"/>
+      <text x="60" y="148" font-size="12" fill="#56655d">01 / SOURCE</text>
+      <text x="60" y="184" font-size="21" font-weight="700">Your Lean project</text>
+      <text x="60" y="218" font-size="15">Git commit or folder</text>
+      <text x="60" y="244" font-size="15" font-family="monospace">Tutorial.lean</text>
+      <text x="60" y="277" font-size="14" fill="#56655d">Lean implementations.</text>
+    </g>
+    <g data-card="request">
+      <rect x="286" y="119" width="244" height="182" rx="10" fill="#fff" stroke="#d5ddd5"/>
+      <text x="306" y="148" font-size="12" fill="#56655d">02 / DECLARATIONS</text>
+      <text x="306" y="184" font-size="21" font-weight="700">Build request</text>
+      <text x="306" y="218" font-size="15">Function names + signatures</text>
+      <text x="306" y="244" font-size="15">Graph programs + contracts</text>
+      <text x="306" y="277" font-size="14" fill="#56655d">Lun generates a driver.</text>
+    </g>
+    <g data-card="build">
+      <rect x="562" y="119" width="214" height="182" rx="10" fill="#e8f0e5" stroke="#aebfa8"/>
+      <text x="582" y="148" font-size="12" fill="#56655d">03 / CHECK + COMPILE</text>
+      <text x="582" y="184" font-size="21" font-weight="700">Ready build</text>
+      <text x="582" y="218" font-size="15">Native executable</text>
+      <text x="582" y="244" font-size="15">Has its own build id</text>
+      <text x="582" y="277" font-size="14" fill="#56655d">An immutable version.</text>
+    </g>
+    <g data-card="execution">
+      <rect x="808" y="119" width="272" height="182" rx="10" fill="#22312a"/>
+      <text x="828" y="148" font-size="12" fill="#cbd9ca">04 / CLI OR HTTP</text>
+      <text x="828" y="184" font-size="21" font-weight="700" fill="#fff">Use the ready build</text>
+      <text x="828" y="218" font-size="15" fill="#fff">Call a function with JSON</text>
+      <text x="828" y="244" font-size="15" fill="#fff">Run a graph with JSON inputs</text>
+      <text x="828" y="277" font-size="14" fill="#cbd9ca">Caller stores state and schedules.</text>
+    </g>
+    <g fill="none" stroke="#6b756f" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M256 210 H282"/><path d="M532 210 H558"/><path d="M778 210 H804"/>
+    </g>
+    <text x="40" y="358" font-size="16">Changing an input uses the compiled build; it does not submit a new build request.</text>
+  </g>
+</svg>

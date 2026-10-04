@@ -49,6 +49,8 @@ def input : Input := { spec, projectDir := "/work/src", packageName := "proj", t
   "lun_function \"math.double\" := «P».«double» : r#\"Nat → Eff [] Nat\"#\n"
 
 #guard has (functionSource ["P", "Q.R"] spec.functions[0]!) "\nopen «P» «Q».«R»\n"
+#guard has (functionSource [] { spec.functions[0]! with producer := true, outputType := some "Nat" }) "lun_producer \"math.double\""
+#guard has (functionSource [] { spec.functions[0]! with producer := true, outputType := some "Nat" }) "lun_producer_output \"math.double\""
 
 #guard graphSource [] spec.graphs[0]! ==
   "import LunDriver.Functions\nopen Control.Reactive LunDriver.Dsl LunDriver.Functions\n" ++

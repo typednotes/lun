@@ -19,6 +19,10 @@
     interpreted by canonical context-bound handlers (a project's own handler
     instance is refused), and free of `sorry`; then the
     function's implementation and typed reference.
+  - `ProducerType σ` / `lun_producer` — resumable steps with ordinary graph
+    arguments followed by `Nat → Option S → Eff effs (List B × S × Option Nat)`.
+    The clock and continuation are supplied by the executor; each `B` is an
+    observable emission, not the whole step envelope. The same audit applies.
   - `lun_graph "name" := r#"program"#` — a graph: a program in linen's
     `Reactive IO Json` monad (`Control.Reactive`) over `input`s and the functions,
     each function applying to observables (a `combineLatest` over
@@ -32,6 +36,9 @@
     and parsed as exactly one term each (`parseEmbeddedTerm`), so it can never
     add commands to a generated module; messages still point into it.
   - `driverMain` — the executable's protocol (see its doc comment).
+  - `GraphState` / `runGraph` — stateless topological execution. The caller
+    supplies and persists state, receives every changed outcome and a next-call
+    timestamp, and schedules wake-ups. Warm workers retain code, never state.
 -/
 import Lean
 import Linen.Control.Reactive
@@ -54,7 +61,7 @@ import Linen.Text.XML
 
 namespace LunDriver
 
-def runtimeContract : String := "bounded-eff-worker-v2"
+def runtimeContract : String := "stateless-producers-v4"
 
 open Lean Control.Monad.Effect Control.Reactive
 
@@ -422,6 +429,29 @@ def vaultJson (response : Network.HTTP.Client.Response) : IO Json := do
     Json.parse text
   IO.ofExcept (parsed.mapError fun _ => IO.userError "invalid vault response")
 
+/-- Validated logical-to-physical routes are read only from protected authority
+    documents. They preserve merged-note secret values without exposing keys. -/
+structure SecretRoute where
+  private mk ::
+  logical : Connector.Resource
+  vaultGraph : String
+  physical : Connector.Resource
+  namespaceBound : Liaison.Wire.validAccountSegment vaultGraph = true
+  logicalBound : Connector.Resource.valid logical = true
+  physicalBound : Connector.Resource.valid physical = true
+
+def secretRoute (j : Json) : Except String SecretRoute := do
+  let fields ← j.getObj?
+  unless fields.toList.all (fun (k,_) => ["logical","namespace","physical"].contains k) do throw "unknown secret route field"
+  let logical ← j.getObjValAs? (List String) "logical"
+  let vaultGraph ← j.getObjValAs? String "namespace"
+  let physical ← j.getObjValAs? (List String) "physical"
+  unless !logical.isEmpty && !physical.isEmpty do throw "secret routes cannot alias a directory"
+  if hn : Liaison.Wire.validAccountSegment vaultGraph = true then
+    if hl : Connector.Resource.valid logical = true then
+      if hp : Connector.Resource.valid physical = true then return ⟨logical,vaultGraph,physical,hn,hl,hp⟩
+  throw "invalid secret route scope"
+
 /-- Live non-cell ceilings, resolved from namespaces only the trusted minting
     service may write. The cell is kept separately to retain its static proof. -/
 structure NativeCeilings (grant : ConnectorGrant) (operation : String) where
@@ -434,6 +464,7 @@ structure NativeCeilings (grant : ConnectorGrant) (operation : String) where
   connectionBound : grant.connectionPermissions.Narrows connection
   cellBound : grant.cell.Narrows cell
   warrantBound : (grant.warrantPermissions.onlyOperation operation).Narrows warrant
+  routes : Array SecretRoute
 
 def nativeAuthority (ctx : ExecutionContext) (cap : Connector.Capability) (grant : ConnectorGrant)
     (warrant : Liaison.Warrant) (request : Liaison.Request) : IO (NativeCeilings grant request.action.value) := do
@@ -458,10 +489,18 @@ def nativeAuthority (ctx : ExecutionContext) (cap : Connector.Capability) (grant
   let projection ← document s!"connector-authority/{ctx.org}/{request.runId.value}/{warrant.id.value}"
   let parsed : Except String (Connector.Capability × Connector.Capability) := do
     let fields ← projection.getObj?
-    unless fields.toList.all (fun (key, _) => ["account", "cell", "warrant"].contains key) do throw "unknown native projection field"
+    unless fields.toList.all (fun (key, _) => ["account", "cell", "warrant", "routes"].contains key) do throw "unknown native projection field"
     unless (← projection.getObjValAs? String "account") == grant.account do throw "native authority account mismatch"
     return (← runtimeCapability (← projection.getObjVal? "cell"), ← runtimeCapability (← projection.getObjVal? "warrant"))
   let (cell, warrant) ← IO.ofExcept (parsed.mapError IO.userError)
+  let routes ← IO.ofExcept ((do
+    match projection.getObjVal? "routes" with
+    | .error _ => return #[]
+    | .ok value =>
+      unless cap.provider == "vault" do throw "secret routing is unavailable to this provider"
+      let values : Array Json ← fromJson? value
+      unless values.size ≤ 1000 do throw "too many project secret routes"
+      values.mapM secretRoute).mapError IO.userError)
   let requestedWarrant := grant.warrantPermissions.onlyOperation request.action.value
   let some orgBound := grant.organization.checkNarrows? organization
     | throw (IO.userError "native request ceilings exceed the live stored authority")
@@ -471,7 +510,7 @@ def nativeAuthority (ctx : ExecutionContext) (cap : Connector.Capability) (grant
     | throw (IO.userError "native request ceilings exceed the live stored authority")
   let some warrantBound := requestedWarrant.checkNarrows? warrant
     | throw (IO.userError "native request ceilings exceed the live stored authority")
-  return ⟨organization, connection, warrant, cell, orgBound.down, connectionBound.down, cellBound.down, warrantBound.down⟩
+  return ⟨organization, connection, warrant, cell, orgBound.down, connectionBound.down, cellBound.down, warrantBound.down,routes⟩
 
 /-- Local native operations consume a four-ceiling resource/payload witness and
     evidence for every warrant caveat. Authenticity is the authenticated app's
@@ -577,7 +616,7 @@ def NativeOperation.check (ctx : ExecutionContext) (cap : Connector.Capability) 
             -- metadata cannot replace any of these server-owned documents.
             let ceilings ← nativeAuthority ctx cap grant warrant request
             let ceilings : NativeCeilings grant op := operation ▸ ceilings
-            -- Both persisted live ceilings and the request/session's narrower
+            -- Both persisted live ceilings and the current request's narrower
             -- ceilings remain load-bearing. Never substitute the broader live
             -- document for an attenuated request grant.
             let authority : Connector.Authority := ⟨grant.organization, grant.connectionPermissions, grant.cell, grant.warrantPermissions.onlyOperation op⟩
@@ -835,15 +874,20 @@ def graphSecretCapability (ctx : ExecutionContext) (cap : SecretStore.Capability
         cap.allows op && (scope.ops.isEmpty || scope.ops.contains op)).map fun op =>
           { operation := secretOperation op, root := scope.namePrefix } }
 
-/-- A graph secret name cannot select compute credentials, another graph or
-    another organization. A name is relative to this graph's vault directory. -/
+/-- A logical project secret name cannot select compute credentials or another
+    organization. Physical routes come exclusively from protected projections. -/
 structure GraphSecret (ctx : ExecutionContext) (cap : SecretStore.Capability) (op : SecretStore.Op) where
+  private mk ::
   name : SecretStore.Name
   staticScope : cap.permits op name = true
   relative : Connector.Resource.valid name = true
   graphBound : Liaison.Wire.validAccountSegment ctx.graph = true
   permission : EffectPermission ctx "SecretStore"
   native : NativeOperation ctx (graphSecretCapability ctx cap) (secretOperation op) name
+  routedGraph : String
+  routedName : Connector.Resource
+  routeBound : Liaison.Wire.validAccountSegment routedGraph = true
+  exactRoute : (routedGraph,routedName) = ((native.live.routes.find? (·.logical == name)).map (fun r => (r.vaultGraph,r.physical))).getD (ctx.graph,name)
 
 def GraphSecret.check (ctx : ExecutionContext) (cap : SecretStore.Capability) (op : SecretStore.Op)
     (name : SecretStore.Name) (scope : cap.permits op name = true) (payload : Json := Json.mkObj []) : IO (GraphSecret ctx cap op) := do
@@ -851,13 +895,15 @@ def GraphSecret.check (ctx : ExecutionContext) (cap : SecretStore.Capability) (o
   if relative : Connector.Resource.valid name = true then
     if bound : Liaison.Wire.validAccountSegment ctx.graph = true then
       let native ← NativeOperation.check ctx (graphSecretCapability ctx cap) (secretOperation op) name payload
-      return ⟨name, scope, relative, bound, permission, native⟩
+      let routing := ((native.live.routes.find? (·.logical == name)).map (fun r => (r.vaultGraph,r.physical))).getD (ctx.graph,name)
+      if hr : Liaison.Wire.validAccountSegment routing.1 = true then
+        return ⟨name, scope, relative, bound, permission, native,routing.1,routing.2,hr,rfl⟩
   throw (IO.userError "invalid graph-secret binding or name")
 
 def GraphSecret.path {ctx : ExecutionContext} {cap : SecretStore.Capability} {op : SecretStore.Op}
     (name : GraphSecret ctx cap op) (kind : String := "data") : String :=
-  s!"/v1/secret/{kind}/graph/{ctx.org}/{ctx.graph}/" ++
-    "/".intercalate (name.name.map Network.HTTP.Types.urlEncode)
+  s!"/v1/secret/{kind}/graph/{ctx.org}/{name.routedGraph}/" ++
+    "/".intercalate (name.routedName.map Network.HTTP.Types.urlEncode)
 
 def boundedVaultJson (authority : Connector.Authority) (response : Network.HTTP.Client.Response) : IO Json := do
   let some bounded := Connector.BoundedResponse.check? authority response.body
@@ -889,7 +935,11 @@ instance instExecutionSecretStore {cap : SecretStore.Capability} : Handler (Secr
        pure (.error (Cloud.Error.protocol "vault historical reads are not supported by this backend"))
     | .list _ prefix' scope cursor => fun ctx => do
       unless cursor.isNone do throw (IO.userError "the graph vault does not support pagination cursors")
-      let target ← GraphSecret.check ctx cap .list prefix' scope
+       let target ← GraphSecret.check ctx cap .list prefix' scope
+       if !target.native.live.routes.isEmpty then
+         let items := target.native.live.routes.toList.filterMap fun route =>
+           if prefix'.isPrefixOf route.logical && cap.permits .list route.logical then some ({name := SecretStore.Name.render route.logical} : Cloud.Secret.Metadata) else none
+         return .ok {items,next := none}
        let response ← vaultRequest ctx .GET (target.path "metadata" ++ (if prefix'.isEmpty then "" else "/"))
        let root ← boundedVaultJson target.native.authority response
       let keys ← IO.ofExcept ((root.getObjValAs? (List String) "keys").mapError fun _ => IO.userError "invalid graph-secret listing")
@@ -946,6 +996,62 @@ instance instFunctionTypeEff {effs : List (Type → Type)} {β : Type} [Handlers
     | [] => toJson <$> m.handle
     | _ => throw (IO.userError "too many arguments")
 
+/-- One bounded producer step. Wake-ups are absolute Unix milliseconds; the
+    continuation is data, never an executable closure. -/
+structure ProducerStep where
+  values : List Json
+  state : Json
+  nextCallAt : Option Nat
+
+/-- Producers have ordinary graph arguments followed by the executor's clock
+    and optional continuation. Only emitted `B`s become observable values. -/
+class ProducerType (σ : Type 1) where
+  Args : List Type
+  Out : Type
+  arity : Nat
+  call : σ → List Json → Nat → Option Json → Execution ProducerStep
+  validateState : Json → Except String Unit
+  validateValue : Json → Except String Unit
+
+instance (priority := high) instProducerTypeStep {S β : Type} {effs : List (Type → Type)}
+    [FromJson S] [ToJson S] [FromJson β] [ToJson β] [Handlers effs Execution] :
+    ProducerType (Nat → Option S → Eff effs (List β × S × Option Nat)) where
+  Args := []
+  Out := β
+  arity := 0
+  call f args now state := do
+    unless args.isEmpty do throw (IO.userError "too many producer arguments")
+    let state ← match state with
+      | none => pure none
+      | some value => match (fromJson? value : Except String S) with
+        | .ok value => pure (some value)
+        | .error error => throw (IO.userError s!"cannot decode producer state: {error}")
+    let (values, state, nextCallAt) ← (f now state).handle
+    return { values := values.map toJson, state := toJson state, nextCallAt }
+  validateState value := (fromJson? value : Except String S).map fun _ => ()
+  validateValue value := (fromJson? value : Except String β).map fun _ => ()
+
+instance instProducerTypeArrow {α : Type} {σ : Type 1} [FromJson α] [ProducerType σ] :
+    ProducerType (α → σ) where
+  Args := α :: ProducerType.Args σ
+  Out := ProducerType.Out σ
+  arity := ProducerType.arity σ + 1
+  call f args now state := do
+    match args with
+    | value :: rest => match fromJson? value with
+      | .ok value => ProducerType.call (f value) rest now state
+      | .error error => throw (IO.userError s!"cannot decode producer argument: {error}")
+    | [] => throw (IO.userError "missing producer argument")
+  validateState := ProducerType.validateState (σ := σ)
+  validateValue := ProducerType.validateValue (σ := σ)
+
+/-- The erased, canonically interpreted producer plus its continuation/value
+    decoders, used when restoring caller-owned JSON. -/
+structure ProducerImpl where
+  call : List Json → Nat → Option Json → Execution ProducerStep
+  validateState : Json → Except String Unit
+  validateValue : Json → Except String Unit
+
 /-- A checked function, ready to run: its name, declared signature and JSON entry
     point. -/
 structure FunctionImpl where
@@ -953,15 +1059,25 @@ structure FunctionImpl where
   signature : String
   arity : Nat
   call : List Json → Execution Json
+  producer : Option ProducerImpl := none
 
 /-- Package a Lean function as a served one. -/
 def FunctionImpl.ofFn {σ : Type 1} [FunctionType σ] (name signature : String) (f : σ) : FunctionImpl :=
   { name, signature, arity := FunctionType.arity σ, call := FunctionType.call f }
 
+/-- Package a producer. It is executed through graph steps, which own its state
+    and schedule, rather than through the single-result function endpoint. -/
+def FunctionImpl.ofProducer {σ : Type 1} [ProducerType σ] (name signature : String) (f : σ) : FunctionImpl :=
+  { name, signature, arity := ProducerType.arity σ
+    call := fun _ => throw (IO.userError "a producer must be called through a graph")
+    producer := some { call := ProducerType.call f
+                       validateState := ProducerType.validateState (σ := σ)
+                       validateValue := ProducerType.validateValue (σ := σ) } }
+
 /-- Values travel through a graph wrapped: `{"ok": v}` for a value,
     `{"error": e}` for a function that failed, `{"blocked": true}` for a function not
     called because an argument has no value. Never as linen's `error`
-    notification, which would end the node's stream for good: in a session a
+    notification, which would end the node's stream for good: in a resumed graph a
     node that failed recovers when its inputs change. -/
 def okValue (v : Json) : Json := Json.mkObj [("ok", v)]
 
@@ -1001,7 +1117,7 @@ def allowedEffects : List (Name × Name) :=
 /-- The `Handler`/`Handlers` instances a function's runner may be built from. -/
 def allowedInstances : List Name :=
   [``instHandlersNil, ``instHandlersCons, ``instFunctionTypeUnit, ``instFunctionTypeArrow,
-    ``instFunctionTypeEff] ++ allowedEffects.map Prod.snd
+    ``instFunctionTypeEff, ``instProducerTypeStep, ``instProducerTypeArrow] ++ allowedEffects.map Prod.snd
 
 /-- The elements of a list literal, reducing it first if it is not one. -/
 def listElems (e : Expr) : MetaM (List Expr) := do
@@ -1017,7 +1133,7 @@ def checkInstance (inst : Expr) : MetaM Unit := do
   for c in (← instantiateMVars inst).getUsedConstants do
     let some info := (← getEnv).find? c | continue
     let concl ← forallTelescope info.type fun _ b => pure b.getAppFn.constName?
-    if (concl == some ``Handler || concl == some ``Handlers || concl == some ``FunctionType) && !allowedInstances.contains c then
+    if (concl == some ``Handler || concl == some ``Handlers || concl == some ``FunctionType || concl == some ``ProducerType) && !allowedInstances.contains c then
       throwError "the effect handler `{c}` is not one of linen's; a function's effects must run \
         with linen's own handlers"
 
@@ -1050,7 +1166,7 @@ def checkExecutable (roots : List Name) : MetaM Unit := do
       if info.isAxiom then throwError "project axiom `{name}` is not allowed"
       for used in info.type.getUsedConstants do
         if [``IO, ``EIO, ``BaseIO, ``Execution, ``ExecutionContext, ``FunctionImpl,
-            ``Handler, ``Handlers, ``FunctionType].contains used then
+             ``Handler, ``Handlers, ``FunctionType, ``ProducerType, ``ProducerImpl, ``ProducerStep].contains used then
           throwError "project declaration `{name}` reaches the runtime/IO boundary `{used}`"
       if let some value := info.value? (allowOpaque := true) then
         todo := value.getUsedConstants.toList ++ info.type.getUsedConstants.toList ++ todo
@@ -1072,7 +1188,7 @@ def functionRow (sig : Expr) : MetaM (Expr × Expr) :=
     return (body.getArg! 0, body.getArg! 1)
 
 /-- The signature check: `fn` is a function of signature `sig`. -/
-def checkFunction (fn : Ident) (sig : Term) : TermElabM Unit := do
+def checkFunction (fn : Ident) (sig : Term) (producer : Bool := false) : TermElabM Unit := do
   let expected ← elabType sig
   synthesizeSyntheticMVarsNoPostponing
   let expected ← instantiateMVars expected
@@ -1107,7 +1223,7 @@ def checkFunction (fn : Ident) (sig : Term) : TermElabM Unit := do
   checkInstance (← synthInstance (mkApp2 (mkConst ``Handlers) row (mkConst ``Execution)))
   if (← collectAxioms const).contains ``sorryAx then
     throwError "`{const}` depends on `sorry`"
-  let runner ← synthInstance (mkApp (mkConst ``FunctionType) expected)
+  let runner ← synthInstance (mkApp (mkConst (if producer then ``ProducerType else ``FunctionType)) expected)
   checkInstance runner
   checkExecutable (e.getUsedConstants.toList ++ runner.getUsedConstants.toList)
 
@@ -1201,6 +1317,13 @@ abbrev FunctionRef (σ : Type 1) [FunctionType σ] : Type := Combine IO Json (Fu
 def functionRef {σ : Type 1} [FunctionType σ] (c : FunctionImpl) : FunctionRef σ :=
   Combine.collect (applyFunction c (FunctionType.Out σ)) [] (FunctionType.Args σ)
 
+/-- The same graph application interface, with the producer's emitted type. -/
+abbrev ProducerRef (σ : Type 1) [ProducerType σ] : Type :=
+  Combine IO Json (ProducerType.Args σ) (ProducerType.Out σ)
+
+def producerRef {σ : Type 1} [ProducerType σ] (c : FunctionImpl) : ProducerRef σ :=
+  Combine.collect (applyFunction c (ProducerType.Out σ)) [] (ProducerType.Args σ)
+
 -- ── Embedded source text ────────────────────────────────────────────────────
 
 /-- Relocate syntax parsed from a string to where that string's content starts
@@ -1250,6 +1373,29 @@ elab "lun_function " name:str " := " fn:ident " : " sig:str : command => do
   elabCommand (← `(def $implId : LunDriver.FunctionImpl :=
     LunDriver.FunctionImpl.ofFn $name $sigText ($fn : $sigId)))
   elabCommand (← `(def $functionId : LunDriver.FunctionRef $sigId := LunDriver.functionRef $implId))
+
+/-- Check and register a resumable producer using the same closure/effect audit
+    as a single-result function. -/
+elab "lun_producer " name:str " := " fn:ident " : " sig:str : command => do
+  let sigStx ← parseEmbeddedTerm sig
+  liftTermElabM (checkFunction fn sigStx true)
+  let n := dottedName name.getString
+  let sigId := mkIdent (`LunDriver.Sig ++ n)
+  let implId := mkIdent (`LunDriver.Impl ++ n)
+  let functionId := mkIdent (`LunDriver.Functions ++ n)
+  let sigText := Syntax.mkStrLit sig.getString
+  elabCommand (← `(abbrev $sigId : Type 1 := $sigStx))
+  elabCommand (← `(def $implId : LunDriver.FunctionImpl :=
+    LunDriver.FunctionImpl.ofProducer $name $sigText ($fn : $sigId)))
+  elabCommand (← `(def $functionId : LunDriver.ProducerRef $sigId := LunDriver.producerRef $implId))
+
+/-- A producer's output constraint applies to each emitted value, not its step
+    envelope or continuation. The kernel checks this equality. -/
+elab "lun_producer_output " name:str " : " output:str : command => do
+  let expected ← parseEmbeddedTerm output
+  let signature := mkIdent (`LunDriver.Sig ++ dottedName name.getString)
+  let evidence := mkIdent (`LunDriver.OutputContract ++ dottedName name.getString)
+  elabCommand (← `(theorem $evidence : LunDriver.ProducerType.Out $signature = $expected := rfl))
 
 /-- A result type owned by the caller, checked against the actual Lean signature. -/
 elab "lun_output " name:str " : " output:str : command => do
@@ -1305,6 +1451,8 @@ inductive NodeKind where
   | apply (name : String) (args : List Nat)
   deriving Inhabited, BEq, Repr, DecidableEq
 
+deriving instance ToJson, FromJson for NodeKind
+
 instance : Quote NodeKind where
   quote
     | .input name => Syntax.mkCApp ``NodeKind.input #[Lean.quote name]
@@ -1318,6 +1466,7 @@ structure GraphImpl where
   kinds : Array NodeKind
   functions : List FunctionImpl
   inputContracts : List (String × InputContract) := []
+  context : ExecutionContext := {}
 
 /-- The builder's primitives, which a graph may reach only through `input` and
     the functions. (`Reactive.fnImpl` is linen ≥ 1.4.0, so it is named, not
@@ -1384,7 +1533,7 @@ def GraphImpl.withContext (d : GraphImpl) (ctx : ExecutionContext) : GraphImpl :
     ((d.graph.fnLabels[k.val]?).bind (functionOfLabel "fn") >>= fun name =>
       d.functions.find? (·.name == name)).map (fun c => c.impl ctx)
       |>.getD fun _ => pure (.error "unknown function")
-  { d with graph := ⟨d.graph.nodes, fns, d.graph.labels, d.graph.fnLabels,
+  { d with context := ctx, graph := ⟨d.graph.nodes, fns, d.graph.labels, d.graph.fnLabels,
       by rw [Array.size_ofFn]; exact d.graph.wellFormed,
       by rw [Array.size_ofFn]; exact d.graph.labelled⟩ }
 
@@ -1517,7 +1666,8 @@ def isFunctionRef (env : Environment) (c : Name) : Bool :=
     | some idx => (`LunDriver.Functions).isPrefixOf (env.header.moduleNames[idx.toNat]!)
     | none => false
   generated && (`LunDriver.Functions).isPrefixOf c &&
-    ((env.find? c).map (·.type.getAppFn.isConstOf ``FunctionRef)).getD false
+    ((env.find? c).map (fun info => info.type.getAppFn.isConstOf ``FunctionRef ||
+      info.type.getAppFn.isConstOf ``ProducerRef)).getD false
 
 /-- The graph check: the definition `programName` uses none of the builder's
     primitives and no `sorry` (see the module documentation), and the error
@@ -1618,7 +1768,7 @@ elab "lun_dependencies " name:str " := " constraints:str : command => do
   let bound := mkIdent (`LunDriver.ConstrainedGraphs ++ dottedName name.getString)
   elabCommand (← `(def $bound : Except String LunDriver.GraphImpl := LunDriver.bindWiring $graphId $evidence))
 
--- ── Running a graph: sessions ─────────────────────────────────────────────────
+-- ── Stateless graph execution ────────────────────────────────────────────────
 
 /-- The nodes shown: inputs and function applications, not start sources. Their
     positions in this list are the ids a graph's nodes are known by. -/
@@ -1649,27 +1799,61 @@ def GraphImpl.inputIndex? (d : GraphImpl) (name : String) : Option Nat :=
 def GraphImpl.inputNames (d : GraphImpl) : List String :=
   d.kinds.toList.filterMap fun | .input n => some n | _ => none
 
-/-- A session's state between calls: linen's clock and every node's operator
-    state, and every node's outcome so far (`Outcome.toJson`, or `null` for a
-    node not computed yet). Plain JSON: lun stores it and hands it back. -/
-structure SessionState where
+/-- A suspended producer carries only typed JSON and its next wake-up. -/
+structure ProducerContinuation where
+  value : Json
+  nextCallAt : Nat
+  deriving ToJson, FromJson
+
+/-- All mutable execution data belongs to the caller. `pending` retains burst
+    emissions when the per-call work budget is reached. No authority is stored. -/
+structure GraphState where
+  contract : String := runtimeContract
+  build : String
+  graphName : String
+  identity : Json
   now : Nat
-  cells : Array (Control.Reactive.Cell Json)
   outcomes : Array Json
+  continuations : Array (Option ProducerContinuation)
+  pending : List (Nat × Json) := []
+  deriving ToJson, FromJson
 
-deriving instance ToJson, FromJson for Control.Reactive.Cell
+/-- Bind state to the exact labelled graph and declared function signatures. -/
+def GraphImpl.stateIdentity (d : GraphImpl) : Json :=
+  Json.mkObj [("kinds", toJson d.kinds), ("labels", toJson (d.graph.labels.map toString)),
+    ("functions", toJson (d.functions.map fun c => (c.name, c.signature, c.producer.isSome)))]
 
-instance : ToJson SessionState where
-  toJson s := Json.mkObj
-    [("now", s.now), ("cells", toJson s.cells), ("outcomes", Json.arr s.outcomes)]
+def GraphImpl.producerAt (d : GraphImpl) (i : Nat) : Option ProducerImpl := do
+  let .apply name _ ← d.kinds[i]? | none
+  (← d.functions.find? (·.name == name)).producer
 
-/-- Read a session's state back, checking it is one of this graph's. -/
-def SessionState.ofJson (d : GraphImpl) (j : Json) : Except String SessionState := do
-  let s : SessionState :=
-    { now := ← j.getObjValAs? Nat "now", cells := ← j.getObjValAs? (Array (Control.Reactive.Cell Json)) "cells"
-      outcomes := ← j.getObjValAs? (Array Json) "outcomes" }
-  unless s.cells.size == d.graph.size && s.outcomes.size == d.graph.size do
-    throw "the session's state is not one of this graph's"
+/-- Validate the complete state before running any effects. State is data from
+    the caller's database, never a source of permissions or runtime context. -/
+def GraphState.ofJson (d : GraphImpl) (build graphName : String) (j : Json) : Except String GraphState := do
+  let s : GraphState ← fromJson? j
+  unless s.contract == runtimeContract && s.build == build && s.graphName == graphName &&
+      s.identity == d.stateIdentity && s.outcomes.size == d.graph.size &&
+      s.continuations.size == d.graph.size do
+    throw "the state is not one of this compiled graph's"
+  for i in [0:s.outcomes.size] do
+    let outcome := s.outcomes[i]!
+    if outcome != Json.null then
+      let fields ← outcome.getObj?
+      unless fields.size == 1 do throw "invalid node outcome in graph state"
+      if let .ok value := outcome.getObjVal? "output" then
+        if let some producer := d.producerAt i then producer.validateValue value
+        if let some (.input name) := d.kinds[i]? then
+          if let some contract := d.inputContracts.lookup name then discard <| contract.validate value
+      else if (outcome.getObjValAs? String "error").isOk then pure ()
+      else if let .ok skipped := outcome.getObjValAs? Nat "skipped" then
+        unless (d.argsOf i).any (fun arg => d.idOf arg == skipped) do throw "invalid skipped node in graph state"
+      else throw "invalid node outcome in graph state"
+    if let some continuation := s.continuations[i]! then
+      let some producer := d.producerAt i | throw "a non-producer has a continuation"
+      producer.validateState continuation.value
+  for (i, value) in s.pending do
+    let some producer := d.producerAt i | throw "a pending emission is not from a producer"
+    producer.validateValue value
   return s
 
 /-- A node's outcome, from the value it last emitted: `{"output": v}`, its
@@ -1700,30 +1884,13 @@ def GraphImpl.checkedInput (d : GraphImpl) (name : String) (json : Json) : Excep
     let validated ← contract.validate json |>.mapError (fun error => s!"input '{name}' violates its configured type: {error}")
     return okValue validated
 
-/-- Feed occurrences — `(graph index, value)`, all at one new instant of the
-    session's clock, in order — and return the new state and the shown nodes
-    whose outcome changed. Only nodes downstream of what is fed run: linen's
-    `Session`, restored from the state, with the operators' state kept. -/
-def GraphImpl.feed (d : GraphImpl) (st : SessionState) (occurrences : List (Nat × Json)) :
-    IO (SessionState × List Nat) := do
-  let t := st.now + 1
-  let s : Session Json := { d.graph.start with now := st.now, cells := st.cells }
-  let s ← d.graph.pushAll s (occurrences.map fun (i, v) => ⟨t, ⟨i⟩, .next v⟩)
-  let last (i : Nat) : Option Json :=
-    ((s.streams[i]?).map (·.toList.reverse)).bind fun es =>
-      es.findSome? fun (_, n) => match n with | .next v => some v | _ => none
-  let mut outcomes := st.outcomes
-  for i in [0:d.kinds.size] do
-    if let some v := last i then outcomes := outcomes.set! i (d.outcomeOf outcomes i v)
-  let changed := d.shown.filter fun i => outcomes[i]? != st.outcomes[i]?
-  return ({ now := t, cells := s.cells, outcomes }, changed)
+/-- A fresh caller-owned state. -/
+def GraphImpl.initial (d : GraphImpl) (build graphName : String) : GraphState :=
+  { build, graphName, identity := d.stateIdentity, now := 0
+    outcomes := Array.replicate d.graph.size Json.null
+    continuations := Array.replicate d.graph.size none }
 
-/-- A new session: the state of a graph no value has reached yet. -/
-def GraphImpl.initial (d : GraphImpl) : SessionState :=
-  { now := 0, cells := (d.graph.start (V := Json)).cells
-    outcomes := Array.replicate d.graph.size Json.null }
-
-/-- The start sources, each fed once when a session starts. -/
+/-- Start sources are fed once, only when the request has no previous state. -/
 def GraphImpl.starts (d : GraphImpl) : List (Nat × Json) :=
   (List.range d.kinds.size).filterMap fun i =>
     if d.kinds[i]? == some .start then some (i, okValue Json.null) else none
@@ -1750,66 +1917,146 @@ def GraphImpl.recoveredOccurrencesOf (d : GraphImpl) (inputs : Json) : Except St
     return (index, checked)
 
 /-- The shown nodes `is`, each with its outcome. -/
-def GraphImpl.nodesJson (d : GraphImpl) (st : SessionState) (is : List Nat) : Json :=
+def GraphImpl.nodesJson (d : GraphImpl) (st : GraphState) (is : List Nat) : Json :=
   Json.arr <| is.toArray.map fun i =>
     let result := match st.outcomes[i]? with
       | some (.obj kvs) => kvs.toList
       | _ => []
     Json.mkObj (d.nodeJson i ++ result)
 
-/-- A graph request, stateless: `{"inputs": {"name": value, …}}`. A session
-    started with every input (a missing one fed an error) and its every node,
-    in order, with its `output`, its own `error`, or the node it was `skipped`
-    because of: its first argument without a value. -/
+/-- Wrap a stored outcome for the canonical function interpreter. -/
+def outcomeValue (outcome : Json) : Json :=
+  match outcome.getObjVal? "output", outcome.getObjValAs? String "error" with
+  | .ok value, _ => okValue value
+  | _, .ok error => failedValue error
+  | _, _ => blockedValue
+
+/-- Execute one node. An argument event restarts a producer and cancels its
+    older queued emissions; a scheduled wake-up resumes its continuation. -/
+def GraphImpl.executeNode (d : GraphImpl) (st : GraphState) (i now : Nat)
+    (resume : Bool := false) : IO (GraphState × List Json) := do
+  let some (.apply name ids) := d.kinds[i]? | return (st, [])
+  let some c := d.functions.find? (·.name == name) | return (st, [])
+  let continuation := if resume then (st.continuations[i]!).map (·.value) else none
+  let st := { st with continuations := st.continuations.set! i none
+                      pending := if resume then st.pending else st.pending.filter (fun item => item.1 != i) }
+  if ids.any (fun arg => st.outcomes[arg]! == Json.null) then return (st, [])
+  let args := ids.map fun arg => outcomeValue st.outcomes[arg]!
+  if args.any (fun value => !(value.getObjVal? "ok").isOk) then return (st, [blockedValue])
+  match c.producer with
+  | none =>
+    let result ← c.impl d.context args
+    return (st, match result with
+      | .ok (some value) => [value]
+      | .ok none => []
+      | .error error => [failedValue error])
+  | some producer =>
+    try
+      let step ← producer.call (args.filterMap fun value => (value.getObjVal? "ok").toOption)
+        now continuation { d.context with functionName := c.name }
+      if let some next := step.nextCallAt then
+        unless next > now do throw (IO.userError "a producer's nextCallAt must be after now")
+      let next := step.nextCallAt.map fun nextCallAt => { value := step.state, nextCallAt : ProducerContinuation }
+      return ({ st with continuations := st.continuations.set! i next }, step.values.map okValue)
+    catch error => return (st, [failedValue (toString error)])
+
+/-- Record a changed outcome immediately. Repeated changes to one node are
+    retained, including a burst that returns to its original value. -/
+def GraphImpl.record (d : GraphImpl) (st : GraphState) (i now : Nat) (value : Json) : GraphState × List Json :=
+  let outcome := d.outcomeOf st.outcomes i value
+  let changed := if st.outcomes[i]! == outcome || d.kinds[i]? == some .start then []
+    else [Json.mkObj (d.nodeJson i ++ ((outcome.getObj?).toOption.map (·.toList)).getD [] ++
+      [("timestamp", toJson now)])]
+  ({ st with outcomes := st.outcomes.set! i outcome }, changed)
+
+/-- Propagate one occurrence in topological order. A diamond sees both newly
+    computed branches before its join runs. Further producer outputs are queued
+    as separate occurrences, each of which traverses downstream nodes. -/
+def GraphImpl.propagate (d : GraphImpl) (initial : GraphState) (i now : Nat) (value : Json) :
+    IO (GraphState × List Json) := do
+  let (initial, first) := d.record initial i now value
+  let mut st := initial
+  let mut changed := first
+  let mut emitted := (Array.replicate d.graph.size false).set! i true
+  for j in [i + 1:d.graph.size] do
+    if !(d.graph.nodes[j]!.args.any (fun arg => emitted[arg.idx]!)) then continue
+    let (updated, values) ← d.executeNode st j now
+    st := updated
+    let value :: rest := values | continue
+    let (updated, changes) := d.record st j now value
+    st := { updated with pending := updated.pending ++ (rest.filterMap fun value =>
+      (value.getObjVal? "ok").toOption.map (j, ·)) }
+    changed := changed ++ changes
+    emitted := emitted.set! j true
+  return (st, changed)
+
+/-- The earliest scheduled producer, ties broken by topological node order. -/
+def GraphState.nextProducer (st : GraphState) : Option (Nat × Nat) :=
+  (List.range st.continuations.size).foldl (fun best i =>
+    match st.continuations[i]!, best with
+    | some next, some (_, time) => if next.nextCallAt < time then some (i, next.nextCallAt) else best
+    | some next, none => some (i, next.nextCallAt)
+    | none, _ => best) none
+
+/-- A pending burst needs an immediate call; otherwise wake at the earliest
+    continuation, or wait for external input when no timed work remains. -/
+def GraphState.nextCallAt (st : GraphState) : Option Nat :=
+  if !st.pending.isEmpty then some st.now
+  else st.nextProducer.map fun (_, time) => max st.now time
+
+/-- Bound latency by processing at most this many queued occurrences/wake-ups
+    per call. Remaining work travels in the returned state, not in a worker. -/
+def graphStepBudget : Nat := 256
+
+/-- Execute a graph step. Fresh inputs take precedence over older scheduled
+    work. Every effect uses this request's context, including on a wake-up. -/
 def runGraph (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
   let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
-  let d := d.withContext ctx
-  let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
-  let fed ← match d.inputNames.mapM (fun name => do
-      let value ← match (inputs.getObjVal? name).toOption with
-        | none => pure (inputValue none name)
-        | some value => d.checkedInput name value
-      pure ((d.inputIndex? name).getD 0, value)) with
-    | .ok values => pure values
-    | .error error => return .error error
-  let (st, _) ← d.feed d.initial (d.starts ++ fed)
-  pure (.ok (Json.mkObj [("nodes", d.nodesJson st d.shown)]))
-
-/-- Start a session: `{"inputs": {…}}` (optional; inputs not given are not fed,
-    so what depends on them has no outcome yet). The answer: the state, and
-    every node. -/
-def sessionStart (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
-  let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
-  let d := d.withContext ctx
+  let build := (req.getObjValAs? String "_build").toOption.getD ""
+  let graphName := (req.getObjValAs? String "_graph").toOption.getD ""
+  let previous ← match req.getObjVal? "state" with
+    | .error _ | .ok .null => pure none
+    | .ok value => match GraphState.ofJson d build graphName value with
+      | .ok value => pure (some value)
+      | .error error => return .error error
+  let now ← match req.getObjVal? "now" with
+    | .error _ => pure ((← Data.Time.getCurrentTime).nanosSinceEpoch / 1000000)
+    | .ok value => match (fromJson? value : Except String Nat) with
+      | .ok now => pure now
+      | .error _ => return .error "now must be a Unix timestamp in milliseconds"
+  let initial := previous.getD (d.initial build graphName)
+  if now < initial.now then return .error "now cannot precede the state's timestamp"
   let inputs := (req.getObjVal? "inputs").toOption.getD (Json.mkObj [])
   let recover := (req.getObjValAs? Bool "recoverInputs").toOption == some true
-  match (if recover then d.recoveredOccurrencesOf inputs else d.occurrencesOf inputs) with
-  | .error e => pure (.error e)
-  | .ok occ =>
-    let (st, _) ← d.feed d.initial (d.starts ++ occ)
-    pure (.ok (Json.mkObj [("state", toJson st), ("nodes", d.nodesJson st d.shown)]))
-
-/-- Update a session: `{"state": …, "inputs": {…}}`. The answer: the new state,
-    every node, and the nodes whose outcome changed (`changed`), in order.
-    Several inputs are fed in order, at one instant of the session's clock: a
-    function reading two of them may run for the intermediate state too; only the
-    final outcomes are reported. -/
-def sessionUpdate (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
-  let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
+  let occurrences ← match (if recover then d.recoveredOccurrencesOf inputs else d.occurrencesOf inputs) with
+    | .ok values => pure values
+    | .error error => return .error error
   let d := d.withContext ctx
-  match (req.getObjVal? "state" >>= SessionState.ofJson d),
-      d.occurrencesOf ((req.getObjVal? "inputs").toOption.getD .null) with
-  | .error e, _ | _, .error e => pure (.error e)
-  | .ok st, .ok occ =>
-    -- An input given the value it already has changes nothing: not fed, so
-    -- no function downstream of it runs again.
-    let occ := occ.filter fun (i, v) =>
-      match st.outcomes[i]?, v.getObjVal? "ok" with
-      | some o, .ok x => o != Json.mkObj [("output", x)]
-      | _, _ => true
-    let (st, changed) ← d.feed st occ
-    pure (.ok (Json.mkObj [("state", toJson st), ("nodes", d.nodesJson st d.shown)
-                         , ("changed", d.nodesJson st changed)]))
+  let mut st := { initial with now }
+  let mut changed := []
+  for (i, value) in (if previous.isNone then d.starts else []) ++ occurrences do
+    if previous.isSome && st.outcomes[i]! == d.outcomeOf st.outcomes i value then continue
+    let (updated, changes) ← d.propagate st i now value
+    st := updated
+    changed := changed ++ changes
+  for _ in [0:graphStepBudget] do
+    if let (i, value) :: rest := st.pending then
+      let (updated, changes) ← d.propagate { st with pending := rest } i now (okValue value)
+      st := updated
+      changed := changed ++ changes
+    else
+      let some (i, time) := st.nextProducer | break
+      if time > now then break
+      let (updated, values) ← d.executeNode st i now true
+      st := updated
+      let value :: rest := values | continue
+      st := { st with pending := st.pending ++ (rest.filterMap fun value =>
+        (value.getObjVal? "ok").toOption.map (i, ·)) }
+      let (updated, changes) ← d.propagate st i now value
+      st := updated
+      changed := changed ++ changes
+  return .ok (Json.mkObj [("state", toJson st), ("nodes", d.nodesJson st d.shown),
+    ("changed", toJson changed), ("nextCallAt", toJson st.nextCallAt)])
 
 /-- The build's functions and graphs, with each graph's structure: its nodes, its
     sources (nodes reading none) and its sinks (nodes none reads). -/
@@ -1817,7 +2064,8 @@ def describe (functions : List FunctionImpl) (graphs : List (String × GraphImpl
   Json.mkObj
     [ ("runtimeContract", Json.str runtimeContract)
     , ("functions", Json.arr (functions.map fun c => Json.mkObj
-        [("name", c.name), ("signature", c.signature), ("arity", c.arity)]).toArray)
+        [("name", c.name), ("signature", c.signature), ("arity", c.arity),
+         ("producer", toJson c.producer.isSome)]).toArray)
     , ("graphs", Json.arr (graphs.map fun (name, d) =>
         let read := d.shown.flatMap d.argsOf
         Json.mkObj
@@ -1867,10 +2115,11 @@ def runFunction (c : FunctionImpl) (req : Json) (traceLog : Option (IO.Ref Bound
     let input := (req.getObjVal? "input").toOption
     pure (.ok (outcomeJson (← c.run input ctx)))
 
-/-- Dispatch using immutable checked graph templates. Context and session state
+/-- Dispatch using immutable checked graph templates. Context and graph state
     are taken exclusively from this request; withContext returns a fresh graph. -/
 def runCommand (functions : List FunctionImpl) (graphs : List (String × Except String GraphImpl))
     (kind name : String) (req : Json) (log : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+  if kind == "warm" then return .ok (Json.mkObj [("runtimeContract", runtimeContract)])
   if kind == "function" then
     match functions.find? (·.name == name) with
     | none => return .error s!"no function named '{name}'"
@@ -1880,9 +2129,7 @@ def runCommand (functions : List FunctionImpl) (graphs : List (String × Except 
   | some (.error e) => return .error s!"graph '{name}': {e}"
   | some (.ok d) =>
     match kind with
-    | "graph" => runGraph d req log
-    | "session-start" => sessionStart d req log
-    | "session-update" => sessionUpdate d req log
+    | "graph" => runGraph d (req.setObjVal! "_graph" (toJson name)) log
     | _ => return .error s!"unknown command '{kind}'"
 
 /-- Kill this worker's whole process group if its parent stops refreshing the
@@ -1935,9 +2182,7 @@ def workerMain (functions : List FunctionImpl) (graphs : List (String × Except 
     - `describe` — the functions and graphs (no stdin).
     - `function NAME` — a function request (`runFunction`).
     - `graph NAME` — a graph request (`runGraph`), stateless.
-    - `session-start NAME` / `session-update NAME` — a session of a graph
-      (`sessionStart`, `sessionUpdate`): its state travels in the request and
-      the response, and lun keeps it between calls.
+    State and producer scheduling travel in graph requests and responses.
 
     Exit code `0` for a response (which may report per-call errors), `1` for a
     request that could not be served (`{"error": …}` on stdout), `2` for a bad
@@ -1970,21 +2215,9 @@ def driverMain (functions : List FunctionImpl) (graphs : List (String × Except 
     | some (.error e) => respond (.error s!"graph '{name}': {e}")
     | some (.ok d) => match ← request with
       | .error e => respond (.error s!"request is not JSON: {e}")
-      | .ok req => respond (← runGraph d req)
-  | [command, name] =>
-    let run? : Option (GraphImpl → Json → IO (Except String Json)) := match command with
-      | "session-start" => some (fun d req => sessionStart d req)
-      | "session-update" => some (fun d req => sessionUpdate d req)
-      | _ => none
-    match run?, graphs.lookup name with
-    | none, _ => IO.eprintln s!"unknown command '{command}'"; pure 2
-    | some _, none => respond (.error s!"no graph named '{name}'")
-    | some _, some (.error e) => respond (.error s!"graph '{name}': {e}")
-    | some run, some (.ok d) => match ← request with
-      | .error e => respond (.error s!"request is not JSON: {e}")
-      | .ok req => respond (← run d req)
+      | .ok req => respond (← runGraph d (req.setObjVal! "_graph" (toJson name)))
   | _ =>
-    IO.eprintln "usage: lun-driver (describe | function NAME | graph NAME | session-start NAME | session-update NAME)"
+    IO.eprintln "usage: lun-driver (describe | function NAME | graph NAME)"
     pure 2
 
 end LunDriver

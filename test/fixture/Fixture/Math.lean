@@ -37,4 +37,33 @@ def succ {effs : List (Type → Type)} (n : Nat) : Eff effs Nat := pure (n + 1)
 /-- Renders a number. -/
 def render (n : Nat) : Eff [] String := pure s!"#{n}"
 
+-- ── Resumable producers ─────────────────────────────────────────────────────
+
+/-- Two immediate values, then another two minutes later, using fresh Trace
+    permission at each invocation of the resumable step. -/
+def delayed (n now : Nat) (state : Option Unit) : Eff [Trace.Trace] (List Nat × Unit × Option Nat) := do
+  Trace.trace "producer step"
+  match state with
+  | none => pure ([n, n + 1], (), some (now + 120000))
+  | some () => pure ([n + 2], (), none)
+
+/-- A finite burst large enough to exercise bounded calls and pending state. -/
+def burst (n _now : Nat) (_state : Option Unit) : Eff [] (List Nat × Unit × Option Nat) :=
+  pure (List.range n, (), none)
+
+/-- A producer source with no graph arguments and an unbounded logical lifetime. -/
+def ticker (now : Nat) (state : Option Nat) : Eff [] (List Nat × Nat × Option Nat) :=
+  let n := state.getD 0
+  pure ([n], n + 1, some (now + 60000))
+
+/-- Wait without emitting, then produce a value. -/
+def later (n now : Nat) (state : Option Unit) : Eff [] (List Nat × Unit × Option Nat) :=
+  match state with
+  | none => pure ([], (), some (now + 120000))
+  | some () => pure ([n], (), none)
+
+/-- A bad schedule must become a local node error, not an executor busy loop. -/
+def invalidWake (_n now : Nat) (_state : Option Unit) : Eff [] (List Nat × Unit × Option Nat) :=
+  pure ([1], (), some now)
+
 end Fixture

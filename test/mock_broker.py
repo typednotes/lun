@@ -1,3 +1,9 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+
 """Credential-free wire-contract double. This is not a signature verifier."""
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer

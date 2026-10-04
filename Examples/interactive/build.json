@@ -1,0 +1,10 @@
+{
+  "source": {"directory": "/absolute/path/to/Examples/interactive/project"},
+  "functions": [
+    {"name": "double", "module": "Demo", "function": "Demo.double", "signature": "Nat → Eff [] Nat", "outputType": "Nat"},
+    {"name": "greet", "module": "Demo", "function": "Demo.greet", "signature": "String → Eff [] String", "outputType": "String"}
+  ],
+  "graphs": [
+    {"name": "main", "program": "do\n  let n ← input \"n\" Nat\n  let name ← input \"name\" String\n  let _ ← double n\n  greet name", "inputTypes": {"n": "Nat", "name": "String"}, "dependencies": {"double": ["n"], "greet": ["name"]}}
+  ]
+}

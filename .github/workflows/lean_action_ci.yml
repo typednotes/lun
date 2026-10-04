@@ -41,13 +41,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: typednotes/linen
-          ref: ${{ vars.LINEN_E2E_REF || 'v1.10.0' }}
+          ref: ${{ vars.LINEN_E2E_REF || 'v1.11.0' }}
           path: linen
       - uses: typednotes/linen/.github/actions/setup-native-deps@v1.10.0
         with:
           keyring: false
       - run: sudo apt-get install -y jq
+      - uses: astral-sh/setup-uv@v9
       - run: curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
       - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - run: lun/test/e2e.sh linen
-      - run: python3 lun/test/temporary_test.py "$RUNNER_TEMP"
+      - run: uv run lun/test/local.py --linen linen
+      - run: uv run lun/Examples/guide/run.py --linen linen --quiet
+      - run: uv run lun/Examples/guide/run.py --linen linen --transport http --quiet
+      - run: uv run lun/test/temporary_test.py "$RUNNER_TEMP"

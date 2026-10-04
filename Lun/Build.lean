@@ -44,6 +44,7 @@ import Lun.Manifest
 import Lun.Diagnostics
 import Linen.System.Process
 import Lun.Fetch
+import Lun.Local
 import Lun.WorkerCache
 
 namespace Lun
@@ -66,7 +67,7 @@ structure Config where
   /-- Pre-built packages: `{cache}/linen/{rev}` is a linen checkout, built,
       at commit `rev`. -/
   packageCache : Option FilePath := none
-  /-- Local mode: `file://` repositories and path dependencies (tests only). -/
+  /-- Local development: folders, `file://` repositories and path dependencies. -/
   allowLocal : Bool := false
   /-- Local contract tests can consume an unpublished broker SDK checkout. -/
   liaisonSdkPath : Option FilePath := none
@@ -77,6 +78,15 @@ structure Config where
 def credentialFreeEnv : Array (String × Option String) :=
   #["SECRETS_USERNAME", "SECRETS_PASSWORD", "SECRETS_TOKEN", "LUN_TOKEN", "LUN_WARRANT_KEY",
     "COMPUTE_DB_URL", "DATABASE_URL"].map fun name => (name, none)
+
+/-- Private service configuration travels in each request, never in a warm
+    worker's inherited environment or in caller-persisted graph state. -/
+def runtimeEnvironmentNames : Array String :=
+  #["SECRETS_HOST", "SECRETS_PORT", "SECRETS_INSECURE", "SECRETS_USERNAME",
+    "SECRETS_PASSWORD", "SECRETS_TOKEN", "LUN_TEMP_ROOT"]
+
+def driverEnv : Array (String × Option String) :=
+  credentialFreeEnv ++ runtimeEnvironmentNames.map fun name => (name, none)
 
 -- ── Statuses ────────────────────────────────────────────────────────────────
 
@@ -203,10 +213,12 @@ structure Builder where
   running : IO.Ref (List String)
   lock : Std.Mutex Unit
   workers : WorkerCache.Cache
+  localLock : Std.Mutex Unit
 
 def Builder.new (cfg : Config) : IO Builder := do
   IO.FS.createDirAll (cfg.workdir / "builds")
   return { cfg, running := ← IO.mkRef [], lock := ← Std.Mutex.new ()
+           localLock := ← Std.Mutex.new ()
            workers := ← WorkerCache.Cache.new cfg.workdir cfg.workerCapacity }
 
 /-- Mark builds a restart interrupted as failed. -/
@@ -303,9 +315,10 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
           error := some error }
     return
   -- 5. describe
-  let d ← System.Process.run (driverExe cfg id).toString #["describe"] cfg.callTimeoutMs (env := credentialFreeEnv)
+  let d ← System.Process.run (driverExe cfg id).toString #["describe"] cfg.callTimeoutMs (env := driverEnv)
   unless d.ok do throw (IO.userError (d.describe "lun-driver describe"))
   let description ← IO.ofExcept (Json.parse d.stdout |>.mapError IO.userError)
+  discard <| b.workers.preload id (driverExe cfg id).toString driverEnv cfg.callTimeoutMs
   let warnings := (Diagnostics.parse r.stdout).filter reportable
   set { status with
         state := .ready
@@ -335,6 +348,12 @@ private def Builder.run (b : Builder) (spec : BuildSpec) (status : Status) : IO 
 /-- Submit a request: the existing build if there is one (ready or in
     progress), otherwise a new one, started in the background. -/
 def Builder.submit (b : Builder) (spec : BuildSpec) : IO Status := do
+  let spec ← if spec.source.directory.isSome then do
+    unless b.cfg.allowLocal do throw (IO.userError "folders are only accepted in local mode")
+    let source ← b.localLock.atomically (m := IO)
+      (monadLift (Local.snapshot spec.source b.cfg.workdir b.cfg.fetchTimeoutMs) : Std.AtomicT Unit IO Source)
+    pure { spec with source }
+    else pure spec
   let id ← buildId b.cfg spec
   let existing ← readStatus b.cfg id
   if (← b.running.get).contains id then
@@ -350,6 +369,13 @@ def Builder.submit (b : Builder) (spec : BuildSpec) : IO Status := do
   b.running.modify (id :: ·)
   let _ ← IO.asTask (prio := .dedicated) (b.run spec status)
   return status
+
+/-- Wait for a submitted build's terminal status (used by the CLI). -/
+def Builder.wait (b : Builder) (id : String) : IO Status := do
+  repeat
+    let some status ← readStatus b.cfg id | throw (IO.userError "build status disappeared")
+    unless status.state.running do return status
+    IO.sleep 50
 
 -- ── Calling a built driver ──────────────────────────────────────────────────
 
@@ -371,9 +397,8 @@ def BoundedRuntime.check? (status : Status) : Option (BoundedRuntime status) :=
   if h : (status.description.bind (fun d => (d.getObjValAs? String "runtimeContract").toOption)) = some Driver.runtimeContract then
     some ⟨h⟩ else none
 
-/-- Call a function (`kind = "function"`), a graph (`kind = "graph"`) or a session of a
-    graph (`kind = "session-start"`/`"session-update"`, `Lun.Session`) of a
-    ready build with a JSON request body. The driver's traces (stderr) come
+/-- Call a function (`kind = "function"`) or a stateless graph step (`kind = "graph")
+    of a ready build with a JSON request body. The driver's traces come
     back as `log`. -/
 def Builder.call (b : Builder) (id kind name : String) (request : String) : IO Answer := do
   let some s ← readStatus b.cfg id | return errorAnswer 404 "no such build"
@@ -390,18 +415,18 @@ def Builder.call (b : Builder) (id kind name : String) (request : String) : IO A
     | .ok (.obj fields) => pure (Json.obj fields)
     | _ => return errorAnswer 400 "the request must be a JSON object"
   -- Private context is service-owned, replaces any caller-supplied value, and
-  -- travels only over this child's stdin. It never enters a spec or session.
+  -- travels only over this child's stdin. It never enters a spec or graph state.
   let mut protectedFields : List (String × Json) := []
-  for name in ["SECRETS_HOST", "SECRETS_PORT", "SECRETS_INSECURE", "SECRETS_USERNAME", "SECRETS_PASSWORD", "SECRETS_TOKEN", "LUN_TEMP_ROOT"] do
+  for name in runtimeEnvironmentNames do
     if let some value ← IO.getEnv name then protectedFields := (name, Json.str value) :: protectedFields
-  let req := (req.setObjVal! "_runtime" (Json.mkObj protectedFields)).setObjVal! "liaisonUrl"
-    (b.cfg.liaisonUrl.map Json.str |>.getD Json.null)
+  let req := (((req.setObjVal! "_runtime" (Json.mkObj protectedFields)).setObjVal! "liaisonUrl"
+    (b.cfg.liaisonUrl.map Json.str |>.getD Json.null)).setObjVal! "_build" (Json.str id)).setObjVal! "_graph" (Json.str name)
   let framed ← match WorkerCache.Request.check id kind name req with
     | .ok r => pure r
     | .error e => return errorAnswer 400 e
   try
     let response ← b.workers.call framed (driverExe b.cfg id).toString
-      (credentialFreeEnv ++ protectedFields.toArray.map fun (name, _) => (name, none)) b.cfg.callTimeoutMs
+      driverEnv b.cfg.callTimeoutMs
     return {status := (response.getObjValAs? Nat "status").toOption.getD 502
             body := (response.getObjVal? "body").toOption.getD Json.null}
   catch e =>

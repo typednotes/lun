@@ -15,7 +15,7 @@ require linen from git "https://github.com/typednotes/linen" @ "v1.11.0"
 require liaison from git "https://github.com/typednotes/liaison" @ "v0.6.0"
 
 package lun where
-  version := v!"0.3.2"
+  version := v!"0.4.0"
   testDriver := "LunTest"
 
 -- The driver runtime, embedded in `Lun.Driver` with `include_str`. Lake does
@@ -43,7 +43,7 @@ lean_exe lun where
   root := `Main
 
 -- `Examples/Client.lean`: lun from a client's side (build a project, register
--- a graph as a session, update its inputs). `Examples/run.sh` runs it against
+-- a graph with caller-owned state, update its inputs). `Examples/run.sh` runs it against
 -- a local lun.
 lean_exe «lun-example» where
   root := `Examples.Client

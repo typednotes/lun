@@ -1,25 +1,41 @@
 # Notebook runtime authority
 
-## Pure public sessions (Lun 0.3.1)
+## Stateless execution and caller-owned scheduling
 
-`POST /v0/builds/{id}/graphs/{name}/sessions` accepts `safeShare:true`. A private
-`PureShareExecution` witness carries policy-derived effects, proof that every
-effect is Trace or Error, and empty connector-grant evidence. `no_external` proves
-any other effect name absent. Start/update consume that witness before invoking
-the driver; `SessionRecord.safeShare` persists it across restarts. Existing
-`ExecutionRefresh` narrowing and immutable binding checks still apply, so an
-update cannot restore wider authority or turn off the stored mode.
+`POST /v0/builds/{id}/graphs/{name}` takes optional previous `state`, input
+changes, and an optional Unix-millisecond `now`. It returns JSON `state`, final
+`nodes`, all ordered `changed` outcomes with timestamps, and `nextCallAt`.
+The caller persists state in its database and schedules due calls. Lun has no
+session records, session routes, per-execution locks, or scheduler. The caller
+serializes each execution and owns effect retries/idempotency and publication.
 
-The app sends no domains and owns viewer identity, expiry, rate limits,
-publication snapshots and response filtering. Private-source-derived results
-may be intentionally published; this runtime proof is about external-effect
-authority, not information-flow secrecy of published data. Credentialed rebuilds
-are never delegated to anonymous viewers. Actual compiled-driver refusal cases
-check no vault reads, broker use or local DB writes before denied effects.
+A declared `producer:true` function has graph arguments followed by
+`Nat → Option S → Eff effs (List B × S × Option Nat)`. Its emitted output
+constraint is `ProducerType.Out`, checked by a kernel equality theorem. Its
+effect runner and continuation/output JSON dictionaries are audited transitively
+under the same rules as ordinary functions. State restoration checks the build,
+graph name, runtime contract, exact labelled layout/signatures, continuation and
+pending-emission decoders, and configured source decoders before effects execute.
 
-This contract describes the coordinated **Lun 0.3.0 / Lode 0.3.0 /
+Each argument event restarts a producer and cancels its earlier queued values
+and wake-up. A due call resumes its typed continuation using the current request's
+authority. A producer must return a next-call time strictly after `now` or finish.
+Queued bursts are bounded to 256 occurrences/wake-ups after supplied inputs per
+call; remaining work is returned in state with an immediate next-call timestamp.
+Every emission traverses a topological pass, so joins see updated upstream
+branches. Changed values are retained individually, including intermediate nodes.
+
+For pure shared executions, the authenticated app supplies Trace/Error-only
+policy and no connector grants on every call. There is no stored `safeShare`
+mode or stored permission ceiling: enforcement of a public execution's persistent
+policy belongs to the app. Runtime permissions always come from the fresh
+request, never from caller-owned graph state.
+
+The earlier integration verification describes the coordinated **Lun 0.3.0 / Lode 0.3.0 /
 Typednotes 0.6.0 / Linen 1.10.0 / Liaison 0.6.0** release. Package locks and
-runtime/image defaults use these versions. Local release tags require publication
+runtime/image defaults for that release use these versions. The current runner
+uses Linen 1.11.0 and the stateless contract above; callers of the historical
+session API must adopt the graph-step API. Local release tags require publication
 before deployment. The native app/writer/runtime integration has passed local verification.
 
 ## Caller-owned types and graph inputs
@@ -48,14 +64,14 @@ equality; `InputContract.decoder_sound` proves that successful decoding preserve
 the JSON and witnesses a value of the configured type.
 
 All newly supplied constrained inputs decode before any graph node executes.
-An invalid session update is a 400 and leaves stored state unchanged. For adopted
-builds, `recoverInputs: true` on session registration converts incompatible
+An invalid graph step is a 400 before execution; the caller retains its previous
+state. For adopted builds, `recoverInputs: true` converts incompatible
 historic values to editable source errors. They never enter a function as values;
 downstream nodes are blocked, and a correctly typed edit recovers the graph.
 The app's adoption/registration caller sends this recovery mode, including when
 an edited source type makes historic JSON incompatible with the rebuilt graph.
 
-## Execution envelope and session attenuation
+## Fresh execution envelopes
 
 Every effect interpreter consumes an `EffectPermission` for the request's
 organization policy. Missing policy grants no effects, including for legacy
@@ -68,12 +84,12 @@ are service configuration injected into private driver stdin by `Builder.call`;
 the caller cannot replace them. Driver/build processes have service credentials
 removed from their environment. `_runtime` is never persisted or returned.
 
-Ready artifacts must attest `runtimeContract: "bounded-eff-worker-v2"`. The server
+Ready artifacts must attest `runtimeContract: "stateless-producers-v4"`. The server
 consumes a `BoundedRuntime` witness before invoking a driver. Older cached
 executables are refused with 409 and resubmission rebuilds them, so deploying
 the new server cannot silently retain a legacy unbounded effect interpreter.
 
-## Loaded graph/process cache (local Lun 0.3.2)
+## Loaded graph/process cache (Lun 0.4.0)
 
 `WorkerCache` has a fixed-size Vector indexed by `Fin capacity.count`, with
 `Capacity.bounded` and `slots_bounded` proving the 16-worker ceiling. A private
@@ -82,13 +98,17 @@ schema key; acquisition returns an actor-matching private lease. Response ID
 equality is checked before results are consumed. Cache entries contain only this
 identity key, a process and its busy flag. Each frame binds fresh context,
 permissions, warrants and a private byte-bounded Trace buffer; graphs are immutable
-templates and session state still travels explicitly in requests/responses.
+templates and graph state travels explicitly in requests/responses.
+Newly compiled artifacts receive a readiness handshake in a preloaded slot before
+publication as ready, when capacity is available. An unused preloaded process
+can bind once to an entry point/actor of the exact same build; subsequent reuse
+requires the exact existing key. No effects or execution state are run at preload.
 
 Queue/write/read deadlines, failed-worker retirement, no automatic effect replay,
 idle replacement and a private parent heartbeat bound the new execution path.
 Pipe/process/mutex semantics and correspondence between the generated protocol
 and the proved metadata remain trusted, exercised with real-process and compiled
-runtime fixtures. See [release preparation](release-0.3.2.md) for the exact Linen
+runtime fixtures. See [release preparation](release-0.4.0.md) for the exact Linen
 dependency lock/publication order and [throughput](throughput.md) for measurements.
 
 ## Native connector envelopes
@@ -233,18 +253,20 @@ Organization-shared external connections may have a credential owner different
 from the actor's `user_id`. The named connection must match the account leaf;
 the broker's independent run projection binds the owner, and local ObjectStore
 preflight reads that owner's connection ceiling. Compute and graph-vault grants
-require the bound actor's account. Session updates cannot change either account.
+require the bound actor's account on every request. Graph state cannot select
+accounts or grant permission to change a credential target.
 
-## Verified app integration and deployment requirements
+## Historical app integration and deployment requirements
 
-App registration, feeds and scheduled calls supply authenticated bindings,
+The previously verified app registration, feeds and scheduled calls supply authenticated bindings,
 organization policy and fresh function-name grants. The app provisions local
 compute/graph-vault authority, separates external credential owners from execution
 actors, and sends `recoverInputs:true` for recorded source adoption. Writer launch
 forwards organization `tools`; messages/refresh preserve the live tool intersection
 and cannot restore removed operations. Trusted writer conversation/publication
 projections and all native repository/model modes now execute in the verified
-whole pipeline; they are not pending runtime/caller blockers.
+whole pipeline for the earlier session-based release. The stateless API requires
+the app to persist graph state and use its scheduler as described in the user guide.
 
 Deployment must apply the coordinated migrations and separated vault ACLs,
 configure private service identities, and use the coordinated release pins.
@@ -253,26 +275,38 @@ authority continues to produce a structured refusal.
 
 ## Verification
 
+The stateless checkout passes `lake test`, the full end-to-end suite (including
+43 caller-state/producer cases), 45 cookbook checks over each of CLI and HTTP,
+and local-folder/restart/transport checks. The native fixture passes **70
+compiled-driver cases** with real SCRAM queries, vault peers and the HMAC broker,
+including fresh-authority graph calls and caller-owned state. This native run
+does not enable the optional public-network HTTP check. The arithmetic benchmark
+validates 400 results and abrupt-parent worker cleanup; see [current measurements](throughput.md#current-stateless-graph-steps-with-caller-owned-state).
+
 Use the local sibling override workspace while these modules are unpublished:
 
 ```sh
 LEAN_NUM_THREADS=2 lake build lun:exe liaison:exe +LunTest +LinenTest.Linen.Control.Monad.Effect.ConnectorTest
 LUN_E2E_WORKSPACE=/path/to/override/workspace LEAN_NUM_THREADS=2 test/e2e.sh ../linen
-python3 test/temporary_test.py /path/to/scratch
-PATH=/path/to/postgresql/bin:$PATH python3 test/runtime.py --temp-root /path/to/scratch --public-http
+uv run test/temporary_test.py /path/to/scratch
+PATH=/path/to/postgresql/bin:$PATH uv run test/runtime.py --temp-root /path/to/scratch --public-http
 ```
+
+On a slower machine, `--build-timeout 1800` gives native compilation more time;
+`--keep-temp` retains the generated driver and logs for diagnostics. Neither flag
+changes execution deadlines or authorization checks.
 
 The final command uses compiled drivers, a real broker/HMAC/ledger, a disposable
 SCRAM-authenticated compute role, and disposable vault/provider HTTP peers. It
 checks permitted effects, denied live ceilings, no rejected provider writes or
 credential reads, cross-schema/user/graph boundaries, malformed grants, typed
-input refusal/recovery, and monotonic session updates. `--public-http` additionally
+input refusal/recovery, and fresh-authority stateless graph updates. `--public-http` additionally
 performs a credential-free TLS GET to example.org; it never invokes a paid model.
 Linux/container and remote provider conformance remain separate verification axes.
 
-Local verification: the full Lun end-to-end suite passes, including caller-owned
+Earlier-release local verification: the full Lun end-to-end suite passed, including caller-owned
 source/output types, named wiring, raw-subject/observable refusals and executable
-closure auditing. `runtime.py --public-http` passes **69 compiled-driver cases**,
+closure auditing. `runtime.py --public-http` passed **69 compiled-driver cases**,
 including real SCRAM queries, graph-vault reads/writes, actual HMAC broker/SigV4
 roundtrips, shared credential owners, live four-ceiling denials, byte limits,
 credential target substitution, historic-input recovery and connector session

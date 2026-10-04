@@ -1,8 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+
 """Measure a real compiled two-Nat-input arithmetic graph, without external IO.
 
 Creates only an isolated local Git project/runner beneath --temp-root. Reports
-HTTP QPS and latency for graph calls and isolated reactive sessions. Compilation
+HTTP QPS and latency for fresh and caller-state graph steps. Compilation
 and warm-up are excluded. No production service, credential or database is used.
 """
 import argparse
@@ -77,21 +82,21 @@ def main():
             assert next(n["output"] for n in answer["nodes"] if n.get("function")=="add")==a+b,answer
         for i in range(20):valid(api(control,path,{**body,"inputs":{"a":i,"b":11}}),i,11)
         rows=[]
-        for mode in ("graph","session"):
+        for mode in ("graph","stateful"):
             for concurrency in args.concurrency:
                 def worker(index):
-                    conn=client();sid=None
-                    if mode=="session":sid=api(conn,path+"/sessions",{**body,"inputs":{"a":0,"b":11}})["session"]
+                    conn=client();state=None
+                    if mode=="stateful":state=api(conn,path,{**body,"inputs":{"a":0,"b":11}})["state"]
                     try:
                         durations=[]
                         for i in range(index,args.requests,concurrency):
                             a=i+1;b=i+11
                             then=time.perf_counter_ns()
-                            answer=api(conn,"/v0/sessions/"+sid if sid else path,{**body,"inputs":{"a":a,"b":b}})
+                            answer=api(conn,path,{**body,"state":state,"inputs":{"a":a,"b":b}})
+                            if mode=="stateful":state=answer["state"]
                             durations.append((time.perf_counter_ns()-then)/1e6);valid(answer,a,b)
                         return durations
                     finally:
-                        if sid:api(conn,"/v0/sessions/"+sid,method="DELETE")
                         conn.close()
                 start=time.perf_counter()
                 with ThreadPoolExecutor(max_workers=concurrency) as pool:durations=sum(pool.map(worker,range(concurrency)),[])
@@ -100,7 +105,7 @@ def main():
                 row={"mode":mode,"concurrency":concurrency,"requests":len(durations),"seconds":seconds,"qps":len(durations)/seconds,"p50_ms":percentile(.5),"p95_ms":percentile(.95),"p99_ms":percentile(.99),"errors":0}
                 rows.append(row);print(json.dumps(row),flush=True)
         sources=[ROOT/"Lun/WorkerCache.lean",ROOT/"Lun/Build.lean",ROOT/"template/LunDriver/Runtime.lean",ROOT.parent/"linen/Linen/System/Worker.lean"]
-        result={"timestamp":datetime.datetime.now(datetime.timezone.utc).isoformat(),"host":platform.platform(),"cpu_count":os.cpu_count(),"runner_commit":run(["git","rev-parse","HEAD"],ROOT),"runner_dirty":bool(run(["git","status","--porcelain"],ROOT)),"source_sha256":{str(p.relative_to(ROOT.parent)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},"worker_count":args.worker_count,"runtime_contract":build["runtimeContract"],"compile_seconds_excluded":compile_seconds,"warmup_requests_excluded":20,"graph":"Nat + Nat -> Eff [] Nat","rows":rows,"method":"Local HTTP with per-worker HTTPConnection objects (automatic reconnect if server closes); modes run graph then session, concurrency 1/4/8 in order. Only 20 sequential graph requests are warmed; later worker cold starts remain in timings. Session rows include setup/teardown overhead in QPS denominator; latencies cover only evaluated requests; all results validated."}
+        result={"timestamp":datetime.datetime.now(datetime.timezone.utc).isoformat(),"host":platform.platform(),"cpu_count":os.cpu_count(),"runner_commit":run(["git","rev-parse","HEAD"],ROOT),"runner_dirty":bool(run(["git","status","--porcelain"],ROOT)),"source_sha256":{str(p.relative_to(ROOT.parent)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},"worker_count":args.worker_count,"runtime_contract":build["runtimeContract"],"compile_seconds_excluded":compile_seconds,"warmup_requests_excluded":20,"graph":"Nat + Nat -> Eff [] Nat","rows":rows,"method":"Local HTTP with per-worker HTTPConnection objects (automatic reconnect if server closes); modes run graph then stateful at the configured concurrencies. Stateful clients carry their own JSON state. Only 20 sequential graph requests are warmed; later worker cold starts remain in timings. Stateful setup is included in the QPS denominator; latencies cover only evaluated requests; all results validated."}
         (output/"results.json").write_text(json.dumps(result,indent=2));print("Result:",output/"results.json",flush=True)
     finally:
         for conn in clients:conn.close()

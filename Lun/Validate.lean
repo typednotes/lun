@@ -68,6 +68,12 @@ def commit (s : String) : Bool := System.GitFn.CommitSha.isValid s
 def projectPath (s : String) : Bool :=
   s.isEmpty || (s.length ≤ 512 && (s.splitOn "/").all System.Git.Repository.isSegment)
 
+/-- An explicit local folder: absolute, without control characters or dot
+    segments. Spaces and Unicode are permitted; it is never shell text. -/
+def localDirectory (s : String) : Bool :=
+  s.startsWith "/" && s.length ≤ 4096 && s.all (fun c => c.toNat ≥ 0x20 && c.toNat != 0x7f) &&
+    ((s.splitOn "/").drop 1).all (fun part => !part.isEmpty && part != "." && part != "..")
+
 -- ── Embedded Lean text ──────────────────────────────────────────────────────
 
 /-- Lean source a request embeds (a signature, a graph program): no NUL and no

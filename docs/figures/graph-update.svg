@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 420" role="img" aria-labelledby="title desc">
+  <title id="title">A stateless graph step recomputes the numeric branch only</title>
+  <desc id="desc">Updating n from 5 to 8 changes nodes 0, 2 and 3. The name input and greet output are retained. The changed array contains three nodes; nodes contains the whole graph. Repeating n equal to 8 performs no downstream work.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#507346" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="420" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">Update n: 5 → 8. Supply the previous state.</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">Green nodes changed. The greeting branch keeps its previous values.</text>
+    <g data-card="n"><rect x="40" y="122" width="180" height="86" rx="9" fill="#e1eedb" stroke="#78956e"/><text x="60" y="149" font-size="13" fill="#507346">0 / INPUT n</text><text x="60" y="183" font-size="24" font-weight="700">8</text></g>
+    <g data-card="double"><rect x="330" y="122" width="180" height="86" rx="9" fill="#e1eedb" stroke="#78956e"/><text x="350" y="149" font-size="15" font-family="monospace">2 / double</text><text x="350" y="183" font-size="24" font-weight="700">16</text></g>
+    <g data-card="render"><rect x="650" y="122" width="180" height="86" rx="9" fill="#e1eedb" stroke="#78956e"/><text x="670" y="149" font-size="15" font-family="monospace">3 / render</text><text x="670" y="183" font-size="24" font-weight="700">"#16"</text></g>
+    <g data-card="name"><rect x="40" y="248" width="180" height="86" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="60" y="275" font-size="13" fill="#56655d">1 / INPUT name</text><text x="60" y="309" font-size="24" font-weight="700" fill="#66746c">"Ada"</text></g>
+    <g data-card="greet"><rect x="330" y="248" width="300" height="86" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="350" y="275" font-size="15" font-family="monospace" fill="#56655d">4 / greet</text><text x="350" y="309" font-size="24" font-weight="700" fill="#66746c">"Hello, Ada!"</text></g>
+    <g data-card="delta"><rect x="868" y="122" width="212" height="212" rx="9" fill="#22312a"/><text x="888" y="151" font-size="18" font-weight="700" fill="#fff">The response</text><text x="888" y="190" font-size="14" font-family="monospace" fill="#fff">changed: [0,2,3]</text><text x="888" y="220" font-size="14" fill="#fff">nodes: all 5 nodes</text><text x="888" y="261" font-size="14" fill="#cbd9ca">Same build id.</text><text x="888" y="287" font-size="14" fill="#cbd9ca">No compilation.</text><text x="888" y="313" font-size="14" fill="#cbd9ca">No greeting call.</text></g>
+    <g fill="none" stroke="#507346" stroke-width="2.5" marker-end="url(#arrow)"><path d="M222 165 H326"/><path d="M512 165 H646"/></g>
+    <path d="M222 291 H328" fill="none" stroke="#b9c3ba" stroke-width="2" stroke-dasharray="5 5"/>
+    <text x="40" y="383" font-size="16">Send n = 8 again: changed = []; no downstream function runs.</text>
+  </g>
+</svg>

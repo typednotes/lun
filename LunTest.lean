@@ -4,7 +4,8 @@ import LunTest.Lun.ManifestTest
 import LunTest.Lun.DriverTest
 import LunTest.Lun.DiagnosticsTest
 import LunTest.Lun.FetchTest
+import LunTest.Lun.LocalTest
 import LunTest.Lun.BuildTest
 import LunTest.Lun.WorkerCacheTest
-import LunTest.Lun.SessionTest
 import LunTest.Lun.ServerTest
+import LunTest.Lun.CliTest

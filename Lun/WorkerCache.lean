@@ -1,6 +1,6 @@
 /- Bounded compiled-process cache. A lease consumes evidence that its immutable
    build/entry point/actor binding matches the current request. No context, grants,
-   results or session state are stored in the cache. -/
+   results or graph state are stored in the cache. -/
 import Lean.Data.Json
 import Linen.System.Worker
 import Linen.Crypto.SecureRandom
@@ -53,9 +53,13 @@ def Request.check (build kind name : String) (body : Json) : Except String Reque
   else throw "invalid worker request framing"
 
 private structure Entry where
+  build : String
   key : String
   worker : System.Worker.Worker
   busy : Bool
+  /-- No execution has used this process. Its first lease may bind any entry
+      point/actor of this exact immutable build, then becomes actor-specific. -/
+  preloaded : Bool := false
 
 /-- Finite slots make exceeding the process ceiling unrepresentable. -/
 structure Cache where
@@ -115,6 +119,37 @@ def Response.check (expected : Nat) (text : String) : Except String (Response ex
   if h : (value.getObjValAs? Nat "id").toOption = some expected then return ⟨value, h⟩
   else throw "worker answered a different request"
 
+/-- Load a compiled artifact before publishing it as ready. The handshake waits
+    until its code/templates are initialized. No function, graph step, authority,
+    or user state is executed or retained. Busy slots are never displaced. -/
+def Cache.preload (cache : Cache) (build exe : String)
+    (env : Array (String × Option String)) (timeoutMs : Nat) : IO (Option UInt32) :=
+  cache.slots.atomically (m := IO) do
+    if ← cache.stopped.get then throw (IO.userError "worker cache is closed")
+    let slots ← get
+    let indices := List.ofFn (fun i : Fin cache.capacity.count => i)
+    for i in indices do
+      if let some entry := slots.get i then
+        if entry.build == build && (← entry.worker.isAlive) then return some entry.worker.pid
+    let vacant := indices.find? fun i => (slots.get i).isNone
+    let idle := indices.find? fun i => ((slots.get i).map fun e => !e.busy).getD false
+    let some i := vacant.or idle | return none
+    if let some entry := slots.get i then entry.worker.stop
+    -- Remove the retired entry before a failing handshake can throw.
+    set (slots.set i.val none i.isLt)
+    let worker ← System.Worker.spawn exe #["worker", cache.leaseFile.toString] env
+    try
+      let frame ← IO.ofExcept ((System.Worker.Line.check (Json.mkObj
+        [("id", Lean.toJson (0 : Nat)), ("call", Json.mkObj
+          [("kind", "warm"), ("name", ""), ("request", Json.mkObj [])])]).compress).mapError IO.userError)
+      let response ← IO.ofExcept ((Response.check 0 (← worker.call frame timeoutMs)).mapError IO.userError)
+      unless (response.value.getObjValAs? Nat "status").toOption == some 200 do
+        throw (IO.userError "compiled worker failed its warm-up handshake")
+      let slots ← get
+      set (slots.set i.val (some { build, key := "", worker, busy := false, preloaded := true }) i.isLt)
+      return some worker.pid
+    catch error => worker.stop; throw error
+
 private def Cache.acquire (cache : Cache) (request : Request) (exe : String)
     (env : Array (String × Option String)) : IO (Option (Lease cache request)) :=
   cache.slots.atomically (m := IO) do
@@ -128,6 +163,14 @@ private def Cache.acquire (cache : Cache) (request : Request) (exe : String)
             let entry := {entry with busy := true}
             set (slots.set i.val (some entry) i.isLt)
             return some ⟨i, entry, h⟩
+    -- A preloaded process has never handled user state or authority. Bind it
+    -- once; subsequent reuse still requires the exact actor/entry-point key.
+    for i in indices do
+      if let some entry := slots.get i then
+        if entry.preloaded && entry.build == request.build && !entry.busy && (← entry.worker.isAlive) then
+          let entry := { entry with key := request.key, busy := true, preloaded := false }
+          set (slots.set i.val (some entry) i.isLt)
+          return some ⟨i, entry, rfl⟩
     -- Use a vacant slot first. Only idle workers may be evicted; never replay
     -- or interrupt a different request to make room for this one.
     let vacant := indices.find? fun i => (slots.get i).isNone
@@ -135,7 +178,7 @@ private def Cache.acquire (cache : Cache) (request : Request) (exe : String)
     let some i := vacant.or idle | return none
     if let some entry := slots.get i then entry.worker.stop
     let worker ← System.Worker.spawn exe #["worker", cache.leaseFile.toString] env
-    let entry : Entry := {key := request.key, worker, busy := true}
+    let entry : Entry := {build := request.build, key := request.key, worker, busy := true}
     set (slots.set i.val (some entry) i.isLt)
     return some ⟨i, entry, rfl⟩
 

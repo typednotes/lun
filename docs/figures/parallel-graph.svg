@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 390" role="img" aria-labelledby="title desc">
+  <title id="title">A graph with independent numeric and greeting branches</title>
+  <desc id="desc">Input n at node 0 flows through double at node 2 and render at node 3. Input name at node 1 flows through greet at node 4. Both sink results are reported, even though the graph program returns greet last.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#6b756f" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="390" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">A graph is a set of function applications.</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">The arrows carry typed values. The numbers are the ids reported in JSON.</text>
+    <g data-card="n"><rect x="40" y="126" width="180" height="86" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="60" y="153" font-size="13" fill="#56655d">0 / INPUT n : Nat</text><text x="60" y="187" font-size="24" font-weight="700">5</text></g>
+    <g data-card="double"><rect x="330" y="126" width="180" height="86" rx="9" fill="#e8f0e5" stroke="#aebfa8"/><text x="350" y="153" font-size="15" font-family="monospace">2 / double(n)</text><text x="350" y="187" font-size="24" font-weight="700">10</text></g>
+    <g data-card="render"><rect x="650" y="126" width="180" height="86" rx="9" fill="#e8f0e5" stroke="#aebfa8"/><text x="670" y="153" font-size="15" font-family="monospace">3 / render</text><text x="670" y="187" font-size="24" font-weight="700">"#10"</text></g>
+    <g data-card="name"><rect x="40" y="258" width="180" height="86" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="60" y="285" font-size="13" fill="#56655d">1 / INPUT name</text><text x="60" y="319" font-size="24" font-weight="700">"Ada"</text></g>
+    <g data-card="greet"><rect x="330" y="258" width="300" height="86" rx="9" fill="#e8f0e5" stroke="#aebfa8"/><text x="350" y="285" font-size="15" font-family="monospace">4 / greet(name)</text><text x="350" y="319" font-size="24" font-weight="700">"Hello, Ada!"</text></g>
+    <g data-card="result"><rect x="868" y="126" width="212" height="218" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="888" y="156" font-size="18" font-weight="700">One graph reply</text><text x="888" y="196" font-size="15">All 5 nodes</text><text x="888" y="226" font-size="15">Both sink results</text><text x="888" y="266" font-size="15" font-family="monospace">sinks: [3, 4]</text><text x="888" y="317" font-size="13" fill="#56655d">Independent branches.</text></g>
+    <g fill="none" stroke="#6b756f" stroke-width="2" marker-end="url(#arrow)"><path d="M222 169 H326"/><path d="M512 169 H646"/><path d="M222 301 H326"/></g>
+  </g>
+</svg>

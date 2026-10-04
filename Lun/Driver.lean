@@ -32,7 +32,7 @@ def runtimeSource : String := include_str "../template/LunDriver/Runtime.lean"
 def temporarySource : String := include_str "../template/LunDriver/temporary.py"
 
 /-- Cached drivers from before bounded execution must never receive calls. -/
-def runtimeContract : String := "bounded-eff-worker-v2"
+def runtimeContract : String := "stateless-producers-v4"
 
 /-- What a driver is generated from. -/
 structure Input where
@@ -95,8 +95,8 @@ private def opensLine (opens : List String) : String :=
 def functionSource (opens : List String) (c : FunctionSpec) : String :=
   s!"import LunDriver.Runtime\nimport {ident c.module}\n" ++
   "open Control.Monad.Effect\n" ++ opensLine opens ++
-  s!"lun_function {strLit c.name} := {ident c.function} : {rawString c.signature}\n" ++
-  (c.outputType.map fun t => s!"lun_output {strLit c.name} : {rawString t}\n").getD ""
+   s!"{if c.producer then "lun_producer" else "lun_function"} {strLit c.name} := {ident c.function} : {rawString c.signature}\n" ++
+   (c.outputType.map fun t => s!"{if c.producer then "lun_producer_output" else "lun_output"} {strLit c.name} : {rawString t}\n").getD ""
 
 /-- The line of a graph module on which its program starts (1-based), and the
     column its first line starts at. -/

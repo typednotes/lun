@@ -31,6 +31,12 @@ def err (j : Json) (allowLocal := false) : String :=
 def mentions (j : Json) (s : String) : Bool := ((err j).splitOn s).length > 1
 
 #guard err (request) == "ok"
+#guard (BuildSpec.parse (request (functions := [(function).setObjVal! "producer" (Json.bool true)]))).toOption.map
+  (fun spec => spec.functions[0]!.producer) == some true
+#guard mentions (request (functions := [(function).setObjVal! "producer" "yes"])) "producer"
+#guard match BuildSpec.parse (request (functions := [(function).setObjVal! "producer" (Json.bool true)])) with
+  | .ok spec => (spec.canonical.getObjVal? "functions" >>= (·.getArr?) >>= fun values => values[0]!.getObjValAs? Bool "producer") == .ok true
+  | _ => false
 #guard ((BuildSpec.parse (request (graphs := [Json.mkObj [("name", "main"), ("program", "do\n  pure ()")]]))).toOption.map
   (·.graphs.length)) == some 1
 #guard (BuildSpec.parse (request (extra := [("open", Json.arr #["P"])]))).toOption.map (·.opens) == some ["P"]
@@ -52,6 +58,22 @@ def mentions (j : Json) (s : String) : Bool := ((err j).splitOn s).length > 1
 #guard mentions (request (extra := [("open", Json.arr #["a b"])])) "open"
 #guard mentions (request (source := [("url", "file:///tmp/r")])) "local mode"
 #guard err (request (source := [("url", "file:///tmp/r")])) (allowLocal := true) == "ok"
+
+def folder (fields : List (String × Json) := []) : Json :=
+  (request).setObjVal! "source" (Json.mkObj (([("directory", "/tmp/local project")] : List (String × Json)) ++ fields))
+
+#guard err folder true == "ok"
+#guard ((err folder).splitOn "local mode").length > 1
+#guard err (folder [("directory", "relative")]) true != "ok"
+#guard err (folder [("directory", "/tmp/../project")]) true != "ok"
+#guard err (folder [("directory", 1)]) true != "ok"
+#guard err (folder [("url", "file:///tmp/project")]) true != "ok"
+#guard err (folder [("commit", commit)]) true != "ok"
+#guard err (folder [("branch", "main")]) true != "ok"
+#guard err (folder [("credentials", Json.mkObj [])]) true != "ok"
+#guard match BuildSpec.parse folder true with
+  | .ok spec => (spec.canonical.getObjVal? "source" >>= (·.getObjValAs? String "directory")) == .ok "/tmp/local project"
+  | _ => false
 
 -- ── Credentials ─────────────────────────────────────────────────────────────
 

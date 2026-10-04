@@ -44,7 +44,7 @@ git -C "$repo" checkout -q main
 
 # ── lun ────────────────────────────────────────────────────────────────────
 broker_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-python3 "$here/mock_broker.py" "$broker_port" >"$work/broker.log" 2>&1 &
+uv run "$here/mock_broker.py" "$broker_port" >"$work/broker.log" 2>&1 &
 broker_pid=$!
 if [ -n "${LUN_E2E_WORKSPACE:-}" ]; then
   (cd "$LUN_E2E_WORKSPACE" && lake build @lun/lun >/dev/null)
@@ -100,12 +100,24 @@ functions='[
   {"name": "seed", "module": "Fixture.Math", "function": "Fixture.seed", "signature": "Unit → Eff [] Nat"},
   {"name": "norm1", "module": "Fixture.Math", "function": "Fixture.norm1", "signature": "Fixture.Point → Eff [Error.Error String] Nat"},
   {"name": "succ", "module": "Fixture.Math", "function": "Fixture.succ", "signature": "Nat → Eff [] Nat"},
-  {"name": "render", "module": "Fixture.Math", "function": "Fixture.render", "signature": "Nat → Eff [] String"}
+  {"name": "render", "module": "Fixture.Math", "function": "Fixture.render", "signature": "Nat → Eff [] String"},
+  {"name":"delayed","module":"Fixture.Math","function":"Fixture.delayed","signature":"Nat → Nat → Option Unit → Eff [Trace.Trace] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"burst","module":"Fixture.Math","function":"Fixture.burst","signature":"Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"ticker","module":"Fixture.Math","function":"Fixture.ticker","signature":"Nat → Option Nat → Eff [] (List Nat × Nat × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"later","module":"Fixture.Math","function":"Fixture.later","signature":"Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"invalidWake","module":"Fixture.Math","function":"Fixture.invalidWake","signature":"Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"}
 ]'
 graphs='[
   {"name": "main", "program": "do\n  let x ← input \"x\" Nat\n  let s ← seed\n  let d ← math.double x\n  let d2 ← math.double d\n  let a ← add d2 s\n  let n ← succ a\n  render n"},
   {"name": "points", "program": "do\n  let p ← input \"p\" Fixture.Point\n  let y ← input \"y\" Nat\n  let n ← norm1 p\n  let a ← add n y\n  let m ← math.double y\n  render a"},
-  {"name": "diamond", "program": "do\n  let x ← input \"x\" Nat\n  let root ← math.double x\n  let left ← succ root\n  let right ← math.double root\n  let joined ← add left right\n  render joined"}
+  {"name": "diamond", "program": "do\n  let x ← input \"x\" Nat\n  let root ← math.double x\n  let left ← succ root\n  let right ← math.double root\n  let joined ← add left right\n  render joined"},
+  {"name":"timed","program":"do\n let x ← input \"x\" Nat\n let v ← delayed x\n render v","inputTypes":{"x":"Nat"},"dependencies":{"delayed":["x"],"render":["delayed"]}},
+  {"name":"bursty","program":"do\n let x ← input \"x\" Nat\n let v ← burst x\n render v","inputTypes":{"x":"Nat"}},
+  {"name":"tick","program":"do\n let v ← ticker\n render v"},
+  {"name":"silent","program":"do\n let x ← input \"x\" Nat\n let v ← later x\n render v","inputTypes":{"x":"Nat"}},
+  {"name":"badSchedule","program":"do\n let x ← input \"x\" Nat\n let v ← invalidWake x\n render v"},
+  {"name":"producerDiamond","program":"do\n let x ← input \"x\" Nat\n let root ← delayed x\n let left ← succ root\n let right ← math.double root\n let joined ← add left right\n render joined","inputTypes":{"x":"Nat"}},
+  {"name":"twoProducers","program":"do\n let x ← input \"x\" Nat\n let a ← delayed x\n let b ← ticker\n add a b","inputTypes":{"x":"Nat"}}
 ]'
 
 # ── Refusals before any build ───────────────────────────────────────────────
@@ -120,7 +132,7 @@ r="$(api POST /v0/builds "$(request "$commit" main "$functions" "$graphs")")"
 expect "submitting a build" 202 '.state == "queued"' "$r"
 id="$(jq -r .id <<<"${r#* }")"
 r="$(wait_build "$id")"
-expect "the build is ready" 200 '.state == "ready" and (.functions | length) == 6 and (.graphs[0].sinks == [6])' "$r"
+expect "the build is ready" 200 '.state == "ready" and (.functions | length) == 11 and (.graphs[0].sinks == [6])' "$r"
 expect "resubmitting returns the ready build" 200 ".id == \"$id\" and .state == \"ready\"" \
   "$(api POST /v0/builds "$(request "$commit" main "$functions" "$graphs")")"
 (cd "$work/lun/builds/$id/driver" && lake env lean "$here/RuntimeChecks.lean")
@@ -139,62 +151,17 @@ expect "a structured argument, and an effect error" 200 '.outputs[0].output == 7
 expect "an unknown function" 404 '.error | test("no function")' "$(api POST "/v0/builds/$id/functions/nope" '{}')"
 expect "the graph, every node" 200 '[.nodes[] | .output] == [5, 10, 10, 20, 30, 31, "#31"]' \
   "$(api POST "/v0/builds/$id/graphs/main" '{"inputs": {"x": 5}}')"
-expect "the graph, a missing input only skips what depends on it" 200 \
-  '.nodes[0].error != null and .nodes[1].output == 10 and .nodes[2].skipped == 0 and .nodes[6].skipped == 5' \
+expect "the graph, a missing input waits while its independent source runs" 200 \
+  '(.nodes[0] | has("output") | not) and .nodes[1].output == 10 and (.nodes[2] | has("output") | not)' \
   "$(api POST "/v0/builds/$id/graphs/main" '{"inputs": {}}')"
 
-# ── Sessions: a live graph, updated input by input ────────────────────────────
-r="$(api POST "/v0/builds/$id/graphs/main/sessions" '{"inputs": {"x": 5}}')"
-expect "a session starts with its inputs" 201 '(.session | length) == 64 and [.nodes[] | .output] == [5, 10, 10, 20, 30, 31, "#31"] and (has("state") | not)' "$r"
-sid="$(jq -r .session <<<"${r#* }")"
-expect "an update returns only the nodes that changed" 200 \
-  '[.changed[] | .id] == [0, 2, 3, 4, 5, 6] and [.changed[] | .output] == [6, 12, 24, 34, 35, "#35"] and .updates == 1' \
-  "$(api POST "/v0/sessions/$sid" '{"inputs": {"x": 6}}')"
-expect "an input set to its value changes nothing (and runs nothing)" 200 '.changed == [] and ((.log // "") | test("adding") | not)' \
-  "$(api POST "/v0/sessions/$sid" '{"inputs": {"x": 6}}')"
-expect "a session keeps its values" 200 '.updates == 2 and .nodes[6].output == "#35"' "$(api GET "/v0/sessions/$sid")"
-expect "an unknown input is refused, and the session is untouched" 400 '.error | test("no input named .z.")' \
-  "$(api POST "/v0/sessions/$sid" '{"inputs": {"z": 1}}')"
-expect "a session ends" 200 '.ended' "$(api DELETE "/v0/sessions/$sid")"
-expect "an ended session is gone" 404 '.error | test("no such session")' "$(api GET "/v0/sessions/$sid")"
-
-r="$(api POST "/v0/builds/$id/graphs/points/sessions" '{"inputs": {"y": 2}}')"
-expect "inputs not given have no outcome yet" 201 '.nodes[0] | has("output") or has("error") | not' "$r"
-sid="$(jq -r .session <<<"${r#* }")"
-expect "a function's error is an outcome that changes" 200 \
-  '[.changed[] | .id] == [0, 2, 3, 5] and .changed[1].error == "x is zero" and .changed[2].skipped == 2' \
-  "$(api POST "/v0/sessions/$sid" '{"inputs": {"p": {"x": 0, "y": 1}}}')"
-expect "a failed node recovers when its input changes" 200 \
-  '[.changed[] | .id] == [0, 2, 3, 5] and .changed[2].output == 3 and .changed[3].output == "#3"' \
-  "$(api POST "/v0/sessions/$sid" '{"inputs": {"p": {"x": 1, "y": 0}}}')"
-expect "several inputs at once" 200 '[.changed[] | .id] == [0, 1, 2, 3, 4, 5] and .changed[4].output == 20' \
-  "$(api POST "/v0/sessions/$sid" '{"inputs": {"p": {"x": 2, "y": 2}, "y": 10}}')"
-
-# Shared upstream -> two derived nodes -> join, then repeated observable emissions.
-r="$(api POST "/v0/builds/$id/graphs/diamond/sessions" '{"inputs":{"x":5}}')"
-expect "a diamond joins two nodes derived from the same upstream" 201 '.nodes[5].output == "#31"' "$r"
-diamond="$(jq -r .session <<<"${r#* }")"
-expect "the diamond emits again after a new source value" 200 '.nodes[5].output == "#37" and .updates == 1' \
-  "$(api POST "/v0/sessions/$diamond" '{"inputs":{"x":6}}')"
-expect "the same node emits a third value in its live session" 200 '.nodes[5].output == "#43" and .updates == 2' \
-  "$(api POST "/v0/sessions/$diamond" '{"inputs":{"x":7}}')"
-expect "repeating an unchanged source does not fabricate an emission" 200 '.changed == [] and .updates == 3' \
-  "$(api POST "/v0/sessions/$diamond" '{"inputs":{"x":7}}')"
-expect "a session of an unknown graph" 404 '.error | test("no graph")' \
-  "$(api POST "/v0/builds/$id/graphs/nope/sessions" '{}')"
+# ── Stateless state round-trips, bursts, scheduling and authority ─────────────
+python3 "$here/stateless.py" "$base" "$id" "$work/caller.sqlite"
+pass "caller-owned state, scheduled producers and incremental graph execution"
 
 # The caller's organization bounds reach the actual effect interpreter.
 expect "a denied effect is refused by the function interpreter" 200 '.error | test("permission denied: Trace")' \
   "$(api POST "/v0/builds/$id/functions/add" '{"input":[1,2],"policy":{"effects":[],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-1"}}')"
-r="$(api POST "/v0/builds/$id/graphs/main/sessions" '{"inputs":{"x":5},"policy":{"effects":["Trace"],"domains":[]},"binding":{"org_id":"org-1","user_id":"user-1"}}')"
-expect "a bound session runs through its permitted handlers" 201 '.nodes[6].output == "#31"' "$r"
-bound="$(jq -r .session <<<"${r#* }")"
-expect "a session binding cannot change on update" 403 '.error | test("binding cannot change")' \
-  "$(api POST "/v0/sessions/$bound" '{"inputs":{"x":6},"binding":{"org_id":"org-2","user_id":"user-1"}}')"
-expect "a denied binding update leaves the session untouched" 200 '.updates == 0 and .nodes[6].output == "#31"' \
-  "$(api GET "/v0/sessions/$bound")"
-expect "a session cannot widen its stored effect ceiling" 403 '.error | test("cannot widen")' \
-  "$(api POST "/v0/sessions/$bound" '{"inputs":{"x":6},"policy":{"effects":["Trace","HTTP"],"domains":[]}}')"
 
 # Native runtime: real Lean witnesses and interpreter, a credential-free broker
 # wire double, and actual filesystem syscalls (not a dry-run interpreter).

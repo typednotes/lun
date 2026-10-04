@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-10-04T05:10:15.386328+00:00",
+  "host": "macOS-26.6.2-arm64-arm-64bit",
+  "cpu_count": 16,
+  "runner_commit": "dc37cab23aa5ba45de998d5551ed3b63332ec314",
+  "runner_dirty": true,
+  "source_sha256": {
+    "lun/Lun/WorkerCache.lean": "ada52fdf5e0a0d23f6012f8907d9043ab4f7292f5a5f8aa43f87852ff20b7164",
+    "lun/Lun/Build.lean": "cbdfeb477523fefdbb940d2b17d3adb8dbfffa5ea7ecba6a9e9d3917a0f5fa73",
+    "lun/template/LunDriver/Runtime.lean": "bab512b61190c300619d6e08fab736f921a5343d9e2e3ec7d69be909a0e7fac9",
+    "linen/Linen/System/Worker.lean": "928e3bf8fcfa60ff9a0586bf7516d7631fbaed91502c8e297f6583fd5c3a603a"
+  },
+  "worker_count": 4,
+  "runtime_contract": "stateless-producers-v4",
+  "compile_seconds_excluded": 23.58145045908168,
+  "warmup_requests_excluded": 20,
+  "graph": "Nat + Nat -> Eff [] Nat",
+  "rows": [
+    {
+      "mode": "graph",
+      "concurrency": 1,
+      "requests": 100,
+      "seconds": 0.15442358306609094,
+      "qps": 647.5694839770783,
+      "p50_ms": 1.5355,
+      "p95_ms": 1.629917,
+      "p99_ms": 1.640083,
+      "errors": 0
+    },
+    {
+      "mode": "graph",
+      "concurrency": 4,
+      "requests": 100,
+      "seconds": 0.440969750052318,
+      "qps": 226.77292487327236,
+      "p50_ms": 1.522375,
+      "p95_ms": 1.694917,
+      "p99_ms": 287.800042,
+      "errors": 0
+    },
+    {
+      "mode": "stateful",
+      "concurrency": 1,
+      "requests": 100,
+      "seconds": 0.15651716687716544,
+      "qps": 638.9075524123174,
+      "p50_ms": 1.542833,
+      "p95_ms": 1.618,
+      "p99_ms": 1.633542,
+      "errors": 0
+    },
+    {
+      "mode": "stateful",
+      "concurrency": 4,
+      "requests": 100,
+      "seconds": 0.04222470778040588,
+      "qps": 2368.2816354836777,
+      "p50_ms": 1.5675,
+      "p95_ms": 1.803458,
+      "p99_ms": 1.865,
+      "errors": 0
+    }
+  ],
+  "method": "Local HTTP with per-worker HTTPConnection objects (automatic reconnect if server closes); modes run graph then stateful at the configured concurrencies. Stateful clients carry their own JSON state. Only 20 sequential graph requests are warmed; later worker cold starts remain in timings. Stateful setup is included in the QPS denominator; latencies cover only evaluated requests; all results validated."
+}

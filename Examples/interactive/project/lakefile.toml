@@ -1,0 +1,10 @@
+name = "lun_demo"
+defaultTargets = ["Demo"]
+
+[[require]]
+name = "linen"
+git = "https://github.com/typednotes/linen"
+rev = "v1.11.0"
+
+[[lean_lib]]
+name = "Demo"

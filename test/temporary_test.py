@@ -1,3 +1,9 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+
 """Exercise the actual syscall adapter; no provider credentials are needed."""
 import importlib.util
 from pathlib import Path

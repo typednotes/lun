@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 465" role="img" aria-labelledby="title desc">
+  <title id="title">A graph error blocks dependents and leaves an independent branch running</title>
+  <desc id="desc">A valid Point with x equal to zero causes norm1 at node 2 to fail. Add at node 3 is skipped because node 2 failed, and render at node 4 is skipped because node 3 has no value. Input y equal to 2 still produces double equal to 4 at node 5. Updating the point to x equal to 3 and y equal to negative 4 recovers the failed branch.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#86665e" stroke-width="1.5"/></marker><marker id="good" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#507346" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="465" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">A failure belongs to a node, not the whole graph.</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">The failed branch reports errors/skips. The independent numeric branch still succeeds.</text>
+    <g data-card="point"><rect x="40" y="135" width="210" height="88" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="60" y="162" font-size="13" fill="#56655d">0 / INPUT p : Point</text><text x="60" y="195" font-size="16" font-family="monospace">{x: 0, y: 1}</text></g>
+    <g data-card="error"><rect x="310" y="135" width="230" height="88" rx="9" fill="#f5e6e0" stroke="#bd9385"/><text x="330" y="162" font-size="15" font-family="monospace">2 / norm1(p)</text><text x="330" y="195" font-size="18" font-weight="700" fill="#8b4b3c">error: "x is zero"</text></g>
+    <g data-card="add"><rect x="600" y="135" width="220" height="88" rx="9" fill="#f2ece8" stroke="#d4c0b7"/><text x="620" y="162" font-size="15" font-family="monospace">3 / add(norm1,y)</text><text x="620" y="195" font-size="18" fill="#86665e">skipped: 2</text></g>
+    <g data-card="render"><rect x="880" y="135" width="200" height="88" rx="9" fill="#f2ece8" stroke="#d4c0b7"/><text x="900" y="162" font-size="15" font-family="monospace">4 / render</text><text x="900" y="195" font-size="18" fill="#86665e">skipped: 3</text></g>
+    <g data-card="y"><rect x="40" y="287" width="210" height="88" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="60" y="314" font-size="13" fill="#56655d">1 / INPUT y : Nat</text><text x="60" y="348" font-size="24" font-weight="700">2</text></g>
+    <g data-card="double"><rect x="600" y="287" width="220" height="88" rx="9" fill="#e8f0e5" stroke="#aebfa8"/><text x="620" y="314" font-size="15" font-family="monospace">5 / double(y)</text><text x="620" y="348" font-size="24" font-weight="700">4</text></g>
+    <g fill="none" stroke="#86665e" stroke-width="2" marker-end="url(#arrow)"><path d="M252 179 H306"/><path d="M542 179 H596"/><path d="M822 179 H876"/><path d="M252 331 H565 V213 H596"/></g>
+    <path d="M252 351 H596" fill="none" stroke="#507346" stroke-width="2" marker-end="url(#good)"/>
+    <text x="303" y="317" font-size="13" fill="#56655d">y is also an argument of add</text>
+    <text x="40" y="430" font-size="16">Supply state + p = {x: 3, y: -4}: norm1 = 7, add = 9, render = "#9". The graph recovers.</text>
+  </g>
+</svg>

@@ -3,7 +3,7 @@
   `lake exe lun-example --repo URL --commit SHA [options]`.
 
   It asks a running lun to build the pricing project (`Examples/pricing`),
-  registers its `invoice` graph as a **session**, then updates one input at a
+  executes its `invoice` graph with caller-owned state, then updates one input at a
   time and prints what each update changed — and, from the functions' traces,
   which functions ran: only those downstream of the input that changed.
 
@@ -74,7 +74,7 @@ def buildRequest (repo branch commit path : String) : Json :=
 def line (sku : String) (quantity unitPrice : Nat) : Json :=
   Json.mkObj [("sku", toJson sku), ("quantity", toJson quantity), ("unitPrice", toJson unitPrice)]
 
-/-- The inputs a session starts with, then the updates, each with what it
+/-- The graph's initial inputs, then the updates, each with what it
     shows. -/
 def start : Json := Json.mkObj
   [ ("lines", Json.arr #[line "notebook" 3 1200, line "pen" 10 250])
@@ -209,17 +209,17 @@ def main (args : List String) : IO UInt32 := do
   IO.println s!"ready: build {id.take 12}…\n"
 
   -- 2. The trusted caller grants only the example's Trace/Error effects and
-  --    binds the session identity. Generated functions cannot supply authority.
+  --    binds the request identity. Generated functions cannot supply authority.
   let execution := [
     ("policy", Json.mkObj [("effects", toJson (["Trace", "Error"] : List String)),
                           ("domains", toJson ([] : List String))]),
     ("binding", Json.mkObj [("org_id", toJson "example-org"),
                            ("user_id", toJson "example-user"),
                            ("graph_id", toJson "invoice")])]
-  -- Register the graph as a session, with its first inputs.
-  let s ← lun.expect [201] .POST s!"/v0/builds/{id}/graphs/invoice/sessions"
+  -- Initialize the graph and retain its returned state in the caller.
+  let s ← lun.expect [200] .POST s!"/v0/builds/{id}/graphs/invoice"
     (Json.mkObj (("inputs", start) :: execution))
-  let session := (s.getObjValAs? String "session").toOption.getD ""
+  let mut state := (s.getObjVal? "state").toOption.getD Json.null
   let mut nodes := (s.getObjValAs? (Array Json) "nodes").toOption.getD #[]
   IO.println s!"▸ start {start.compress}"
   printNodes nodes (nodes.filter fun n => (n.getObjVal? "function").toOption.isSome)
@@ -228,8 +228,9 @@ def main (args : List String) : IO UInt32 := do
   -- 3. Update inputs, one change at a time: only what changed comes back.
   let mut lastChanged : List Nat := []
   for (what, inputs) in updates do
-    let u ← lun.expect [200] .POST s!"/v0/sessions/{session}"
-      (Json.mkObj (("inputs", inputs) :: execution))
+    let u ← lun.expect [200] .POST s!"/v0/builds/{id}/graphs/invoice"
+      (Json.mkObj (("state", state) :: ("inputs", inputs) :: execution))
+    state := (u.getObjVal? "state").toOption.getD state
     nodes := (u.getObjValAs? (Array Json) "nodes").toOption.getD nodes
     let changed := (u.getObjValAs? (Array Json) "changed").toOption.getD #[]
     lastChanged := changed.toList.filterMap fun n => (n.getObjValAs? Nat "id").toOption
@@ -241,9 +242,7 @@ def main (args : List String) : IO UInt32 := do
       if what.startsWith "ship to Germany" then
         IO.FS.writeFile file (dot s!"after {inputs.compress}: what changed is filled" nodes lastChanged)
 
-  -- 4. The session stays until it is ended.
-  discard <| lun.expect [200] .DELETE s!"/v0/sessions/{session}"
-  IO.println "session ended"
+  IO.println "graph execution complete"
   return 0
 
 end Examples.Client
