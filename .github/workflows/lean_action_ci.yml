@@ -47,7 +47,7 @@ jobs:
         with:
           keyring: false
       - run: sudo apt-get install -y jq
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
       - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - run: lun/test/e2e.sh linen
