@@ -15,7 +15,7 @@ require linen from git "https://github.com/typednotes/linen" @ "v1.12.0"
 require liaison from git "https://github.com/typednotes/liaison" @ "v0.6.0"
 
 package lun where
-  version := v!"0.4.1"
+  version := v!"0.4.2"
   testDriver := "LunTest"
 
 -- The driver runtime, embedded in `Lun.Driver` with `include_str`. Lake does

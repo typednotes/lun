@@ -92,13 +92,33 @@ Enter commands such as:
 double 21
 n 8
 name Ada
-show
+each [1,2,3]
+whole [1,2,3]
+paced [1,2,3,4,5,6]
+next
+next
+next
+tick
+next tick
+show main
 quit
 ```
 
 `double 21` calls one function. `n 8` and `name Ada` update different branches
-of a graph whose state the client retains. `show` displays its latest reply.
-The client prints formatted JSON replies and removes its temporary project on exit.
+of a graph whose state the client retains. `each` emits individual list elements;
+`whole` emits one list value. `paced` yields inside an if/loop block with waits,
+and `tick` starts a five-second source. `next [GRAPH]` advances that graph's demo
+clock to its requested `nextCallAt` immediately, making timed examples quick to
+explore. `show [GRAPH]` displays its latest reply. The client prints formatted
+JSON and removes its temporary project on exit. See the
+[small example's walkthrough](../Examples/interactive/README.md#yield-a-list-yield-elements-and-wait-inside-a-loop).
+
+To run and verify the complete small demonstration without prompts:
+
+```sh
+uv run Examples/interactive/run.py --demo
+uv run Examples/interactive/run.py --transport http --demo
+```
 
 Use an automatically started local HTTP server instead:
 

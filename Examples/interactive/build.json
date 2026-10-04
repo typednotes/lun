@@ -2,9 +2,18 @@
   "source": {"directory": "/absolute/path/to/Examples/interactive/project"},
   "functions": [
     {"name": "double", "module": "Demo", "function": "Demo.double", "signature": "Nat → Eff [] Nat", "outputType": "Nat"},
-    {"name": "greet", "module": "Demo", "function": "Demo.greet", "signature": "String → Eff [] String", "outputType": "String"}
+    {"name": "greet", "module": "Demo", "function": "Demo.greet", "signature": "String → Eff [] String", "outputType": "String"},
+    {"name": "sum", "module": "Demo", "function": "Demo.sum", "signature": "List Nat → Eff [] Nat", "outputType": "Nat"},
+    {"name": "each", "module": "Demo", "function": "Demo.each", "signature": "List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)", "producer": true, "outputType": "Nat"},
+    {"name": "whole", "module": "Demo", "function": "Demo.whole", "signature": "List Nat → Nat → Option Producer.Cursor → Eff [] (List (List Nat) × Producer.Cursor × Option Nat)", "producer": true, "outputType": "List Nat"},
+    {"name": "paced", "module": "Demo", "function": "Demo.paced", "signature": "List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)", "producer": true, "outputType": "Nat"},
+    {"name": "tick", "module": "Demo", "function": "Demo.tick", "signature": "Nat → Option Producer.CycleCursor → Eff [] (List Nat × Producer.CycleCursor × Option Nat)", "producer": true, "outputType": "Nat"}
   ],
   "graphs": [
-    {"name": "main", "program": "do\n  let n ← input \"n\" Nat\n  let name ← input \"name\" String\n  let _ ← double n\n  greet name", "inputTypes": {"n": "Nat", "name": "String"}, "dependencies": {"double": ["n"], "greet": ["name"]}}
+    {"name": "main", "program": "do\n  let n ← input \"n\" Nat\n  let name ← input \"name\" String\n  let _ ← double n\n  greet name", "inputTypes": {"n": "Nat", "name": "String"}, "dependencies": {"double": ["n"], "greet": ["name"]}},
+    {"name": "each", "program": "do\n  let xs ← input \"xs\" (List Nat)\n  let item ← each xs\n  double item", "inputTypes": {"xs": "List Nat"}, "dependencies": {"each": ["xs"], "double": ["each"]}},
+    {"name": "whole", "program": "do\n  let xs ← input \"xs\" (List Nat)\n  let batch ← whole xs\n  sum batch", "inputTypes": {"xs": "List Nat"}, "dependencies": {"whole": ["xs"], "sum": ["whole"]}},
+    {"name": "paced", "program": "do\n  let xs ← input \"xs\" (List Nat)\n  let item ← paced xs\n  double item", "inputTypes": {"xs": "List Nat"}, "dependencies": {"paced": ["xs"], "double": ["paced"]}},
+    {"name": "tick", "program": "do\n  let value ← tick\n  double value", "dependencies": {"tick": [], "double": ["tick"]}}
   ]
 }

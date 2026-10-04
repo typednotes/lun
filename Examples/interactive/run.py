@@ -21,6 +21,32 @@ import urllib.request
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
+COMMANDS = (
+    "Commands: double N | n N | name TEXT | show [GRAPH] | help | quit\n"
+    "Producers: each [1,2,3] | whole [1,2,3] | paced [1,2,3,4,5,6] | tick | next [GRAPH]"
+)
+
+# The scripted demonstration verifies actual compiled outcomes and schedules.
+DEMO_COMMANDS = [
+    ("double 21", {"output": 42}),
+    ("n 8", {"outputs": {"double": [16]}}),
+    ("name Ada", {"outputs": {"greet": ["Hello, Ada!"]}}),
+    ("each [1,2,3]", {"outputs": {"each": [1, 2, 3], "double": [2, 4, 6]}, "nextCallAt": None}),
+    ("each []", {"outputs": {"each": [], "double": []}, "nextCallAt": None}),
+    ("whole [1,2,3]", {"outputs": {"whole": [[1, 2, 3]], "sum": [6]}, "nextCallAt": None}),
+    ("paced [1,2,3,4,5,6]", {"outputs": {"paced": [1, 2], "double": [2, 4]}, "nextCallAt": 3000}),
+    ("next", {"outputs": {"paced": [4], "double": [8]}, "nextCallAt": 4000}),
+    ("next", {"outputs": {"paced": [6], "double": [12]}, "nextCallAt": 5000}),
+    ("next", {"outputs": {"paced": [], "double": []}, "nextCallAt": None}),
+    ("paced [10,20]", {"outputs": {"paced": [10, 20], "double": [20, 40]}, "nextCallAt": 7000}),
+    ("paced [30,40]", {"outputs": {"paced": [30, 40], "double": [60, 80]}, "nextCallAt": 7000}),
+    ("next paced", {"outputs": {"paced": [], "double": []}, "nextCallAt": None}),
+    ("tick", {"outputs": {"tick": [0], "double": [0]}, "nextCallAt": 6000}),
+    ("next tick", {"outputs": {"tick": [1], "double": [2]}, "nextCallAt": 11000}),
+    ("show main", {"outputs": {"greet": ["Hello, Ada!"]}}),
+    ("quit", None),
+]
+
 
 class Client:
     """Own one local CLI process or HTTP server with the same API operations."""
@@ -154,19 +180,40 @@ def build_request(project):
     return request
 
 
+def check_demo(command, reply, expected):
+    """Check emissions and wake-ups from real CLI/HTTP responses."""
+    for field in ("output", "nextCallAt"):
+        if field in expected and reply.get(field) != expected[field]:
+            raise AssertionError(f"{command}: unexpected {field}: {json.dumps(reply)}")
+    for name, values in expected.get("outputs", {}).items():
+        actual = [node["output"] for node in reply["changed"] if node.get("function") == name and "output" in node]
+        if actual != values:
+            raise AssertionError(f"{command}: {name} emitted {actual}, expected {values}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--transport", choices=["cli", "http"], default="cli")
-    parser.add_argument("--linen", type=Path, default=ROOT / ".lake/packages/linen")
-    parser.add_argument("--demo", action="store_true", help="run scripted graph updates and exit")
+    parser.add_argument("--linen", type=Path, help="select a local Linen checkout instead of the locked dependency")
+    parser.add_argument("--demo", action="store_true", help="verify scripted graph updates, yields and waits, then exit")
     args = parser.parse_args()
+    linen = args.linen or ROOT / ".lake/packages/linen"
     from rich.console import Console
 
     console = Console()
-    subprocess.run(["lake", "build", "lun"], cwd=ROOT, check=True, stdout=sys.stderr, stderr=sys.stderr)
     with tempfile.TemporaryDirectory(prefix="lun-interactive-") as scratch:
         scratch = Path(scratch)
-        project = prepare_project(scratch / "project", args.linen)
+        build_command = ["lake", "build", "lun"]
+        if args.linen is not None:
+            overrides = scratch / "lake-overrides.json"
+            overrides.write_text(json.dumps({"version": "1.2.0", "packages": [{
+                "type": "path", "scope": "", "name": "linen", "inherited": False,
+                "dir": str(linen.resolve()), "manifestFile": "lake-manifest.json",
+                "configFile": "lakefile.lean",
+            }]}))
+            build_command.insert(1, "--packages=" + str(overrides))
+        subprocess.run(build_command, cwd=ROOT, check=True, stdout=sys.stderr, stderr=sys.stderr)
+        project = prepare_project(scratch / "project", linen)
         with Client(args.transport, scratch / "work") as client:
             def request(method, path, body=None):
                 result = client.request(method, path, body)
@@ -178,16 +225,34 @@ def main():
             print(f"Building the local folder through {args.transport}…", file=sys.stderr)
             build = request("POST", "/v0/builds", build_request(project))
             base = "/v0/builds/" + build["id"]
-            snapshot = request("POST", base + "/graphs/main", {
-                "inputs": {"n": 5, "name": "world"},
-                "binding": {"org_id": "local", "user_id": "developer", "graph_id": "main"},
-                "policy": {"effects": [], "domains": []},
-            })
-            print("Commands: double 21 | n 8 | name Ada | show | quit", file=sys.stderr)
-            commands = iter(["double 21", "n 8", "name Ada", "show", "quit"]) if args.demo else None
+            snapshots = {}
+            last_graph = "main"
+
+            def step(graph, inputs=None, now=None, fresh=False):
+                nonlocal last_graph
+                previous = None if fresh else snapshots.get(graph)
+                if now is None:
+                    now = previous["state"]["now"] if previous else 1000
+                reply = request("POST", base + "/graphs/" + graph, {
+                    "state": previous["state"] if previous else None,
+                    "inputs": inputs or {}, "now": now,
+                    "binding": {"org_id": "local", "user_id": "developer", "graph_id": graph},
+                    "policy": {"effects": [], "domains": []},
+                })
+                snapshots[graph] = reply
+                last_graph = graph
+                return reply
+
+            step("main", {"n": 5, "name": "world"})
+            print(COMMANDS, file=sys.stderr)
+            print("next advances the selected graph's demo clock to nextCallAt; it does not sleep.", file=sys.stderr)
+            commands = iter(DEMO_COMMANDS) if args.demo else None
+            checks = 0
             while True:
+                expected = None
                 if commands is not None:
-                    line = next(commands)
+                    line, expected = next(commands)
+                    print("lun> " + line, file=sys.stderr)
                 else:
                     print("lun> ", end="", file=sys.stderr, flush=True)
                     line = sys.stdin.readline()
@@ -196,8 +261,14 @@ def main():
                 command, _, argument = line.strip().partition(" ")
                 if command == "quit":
                     break
+                reply = None
                 if command == "show":
-                    console.print_json(data=snapshot, indent=2, ensure_ascii=False)
+                    graph = argument.strip() or last_graph
+                    if graph not in snapshots:
+                        print(f"{graph} has not been initialized.", file=sys.stderr)
+                        continue
+                    reply = snapshots[graph]
+                    console.print_json(data=reply, indent=2, ensure_ascii=False)
                 elif command == "double":
                     try:
                         number = int(argument)
@@ -206,7 +277,7 @@ def main():
                     except ValueError:
                         print("double expects a natural number", file=sys.stderr)
                         continue
-                    request("POST", base + "/functions/double", {"input": number})
+                    reply = request("POST", base + "/functions/double", {"input": number})
                 elif command in ("n", "name"):
                     try:
                         value = int(argument) if command == "n" else argument
@@ -215,15 +286,46 @@ def main():
                     except ValueError:
                         print("n expects a natural number", file=sys.stderr)
                         continue
-                    snapshot = request("POST", base + "/graphs/main",
-                                       {"state": snapshot["state"], "inputs": {command: value}})
+                    reply = step("main", {command: value})
+                elif command in ("each", "whole", "paced"):
+                    try:
+                        values = json.loads(argument)
+                        if not isinstance(values, list) or any(type(value) is not int or value < 0 for value in values):
+                            raise ValueError()
+                    except ValueError:
+                        print(f"{command} expects a JSON list of natural numbers, e.g. [1,2,3].", file=sys.stderr)
+                        continue
+                    reply = step(command, {"xs": values})
+                elif command == "tick":
+                    if argument.strip():
+                        print("tick takes no argument; use next tick to resume it.", file=sys.stderr)
+                        continue
+                    reply = step("tick", fresh=True)
+                elif command == "next":
+                    graph = argument.strip() or last_graph
+                    if graph not in snapshots:
+                        print(f"{graph} has not been initialized.", file=sys.stderr)
+                        continue
+                    next_at = snapshots[graph]["nextCallAt"]
+                    if next_at is None:
+                        print(f"{graph} has no scheduled work.", file=sys.stderr)
+                        continue
+                    print(f"Advancing {graph} to now={next_at} ms.", file=sys.stderr)
+                    reply = step(graph, now=next_at)
                 elif command:
-                    print("Commands: double N | n N | name TEXT | show | quit", file=sys.stderr)
+                    print(COMMANDS, file=sys.stderr)
+                if expected is not None:
+                    if reply is None:
+                        raise AssertionError(f"{line}: the demo command produced no reply")
+                    check_demo(line, reply, expected)
+                    checks += 1
+            if args.demo:
+                print(f"{checks} interactive demo checks passed over {args.transport}.", file=sys.stderr)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (RuntimeError, subprocess.CalledProcessError) as error:
+    except (AssertionError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"lun example: {error}", file=sys.stderr)
         sys.exit(1)

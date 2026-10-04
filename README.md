@@ -35,10 +35,11 @@ its database and schedules further calls. Compiled code stays loaded in warm wor
 build/run mental model, SVG figures, and a verified cookbook of CLI, HTTP,
 function, stateless graph, delayed-producer, error-recovery and scoped-effect examples.
 
-**Lun 0.4.1** adds illustrated, runnable sequential producer recipes with
-Linen's `yield`, `yieldAll`, waits, branches and loops. Bounded loaded workers
-and caller-owned resumable execution retain the `stateless-producers-v4` contract.
-See [release preparation](docs/release-0.4.1.md): publish Linen 1.12.0 before
+**Lun 0.4.2** brings `yield`, `yieldAll`, paced loops and a five-second source
+to the [small interactive example](Examples/interactive/README.md), and fixes
+the CI action reference that blocked the preceding release. Bounded loaded
+workers and caller-owned execution retain the `stateless-producers-v4` contract.
+See [release preparation](docs/release-0.4.2.md): publish Linen 1.12.0 before
 publishing this runtime. The dependency is pinned and locked to its exact local
 release commit. Liaison's pure SDK remains
 0.6.0; the deployed broker remains 0.6.3.
