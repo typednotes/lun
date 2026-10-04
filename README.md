@@ -14,7 +14,7 @@
   <a href="https://github.com/typednotes/lun/pkgs/container/lun"><img src="https://img.shields.io/badge/ghcr.io-typednotes%2Flun-blue?logo=docker" alt="Docker image"></a>
   <a href="https://github.com/typednotes/lun/tags"><img src="https://img.shields.io/github/v/tag/typednotes/lun?label=version&sort=semver" alt="Version"></a>
   <a href="https://lean-lang.org/"><img src="https://img.shields.io/badge/Lean-v4.34.0-blue" alt="Lean v4.34.0"></a>
-   <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v1.11.0-c9b896" alt="Built on linen v1.11.0"></a>
+   <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v1.12.0-c9b896" alt="Built on linen v1.12.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 </p>
 
@@ -35,12 +35,12 @@ its database and schedules further calls. Compiled code stays loaded in warm wor
 build/run mental model, SVG figures, and a verified cookbook of CLI, HTTP,
 function, stateless graph, delayed-producer, error-recovery and scoped-effect examples.
 
-**Lun 0.4.0** includes bounded loaded graph/driver workers
-and caller-owned resumable execution. Its `stateless-producers-v4` runtime replaces
-the historical session API. See
-[release preparation](docs/release-0.4.0.md): publish Linen 1.11.0 before publishing
-this runtime. The dependency is pinned and locked to its exact local release
-commit, verified with the normal locked build. Liaison's pure SDK remains
+**Lun 0.4.1** adds illustrated, runnable sequential producer recipes with
+Linen's `yield`, `yieldAll`, waits, branches and loops. Bounded loaded workers
+and caller-owned resumable execution retain the `stateless-producers-v4` contract.
+See [release preparation](docs/release-0.4.1.md): publish Linen 1.12.0 before
+publishing this runtime. The dependency is pinned and locked to its exact local
+release commit. Liaison's pure SDK remains
 0.6.0; the deployed broker remains 0.6.3.
 
 The new repeatable [arithmetic graph benchmark](docs/throughput.md) measures the

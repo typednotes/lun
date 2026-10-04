@@ -30,18 +30,23 @@ def prepare_project(destination, linen):
         'name = "lun_guide"\ndefaultTargets = ["Tutorial"]\n\n'
         '[[require]]\nname = "linen"\npath = ' + json.dumps(str(Path(linen).resolve())) + '\n\n'
         '[[lean_lib]]\nname = "Tutorial"\n'
+        '\n[[lean_lib]]\nname = "Producers"\n'
     )
     subprocess.run(["lake", "update"], cwd=destination, check=True, stdout=sys.stderr, stderr=sys.stderr)
     return destination
 
 
-def build_request(project):
+def build_request(project, producers=False):
     request = json.loads((HERE / "build.json").read_text())
     request["source"] = {"directory": str(Path(project).resolve())}
+    if producers:
+        extra = json.loads((HERE / "producers.json").read_text())
+        request["functions"].extend(extra["functions"])
+        request["graphs"].extend(extra["graphs"])
     return request
 
 
-def run_cookbook(client, project, console, quiet):
+def run_cookbook(client, project, console, quiet, producers=False):
     checks = 0
 
     def request(title, method, path, body=None, status=200, predicate=lambda body: True):
@@ -63,9 +68,9 @@ def run_cookbook(client, project, console, quiet):
     def envelope(inputs, effects=("Trace", "Error"), graph="parallel", user="developer", **fields):
         return {"inputs": inputs, **authority(effects, graph, user), **fields}
 
-    spec = build_request(project)
+    spec = build_request(project, producers)
     built = request("Build a working folder", "POST", "/v0/builds", spec,
-                    predicate=lambda body: body["state"] == "ready" and len(body["functions"]) == 14)
+                    predicate=lambda body: body["state"] == "ready" and len(body["functions"]) == len(spec["functions"]))
     build = built["id"]
     base = f"/v0/builds/{build}"
     request("Reuse an identical build", "POST", "/v0/builds", spec,
@@ -162,6 +167,92 @@ def run_cookbook(client, project, console, quiet):
             {"state": json.loads(json.dumps(early["state"])), "now": 121000},
             predicate=lambda body: [n["output"] for n in body["changed"]] == [12, "#12"] and body["nextCallAt"] is None)
 
+    if producers:
+        def outputs(reply, name):
+            return [n["output"] for n in reply["changed"] if n.get("function") == name and "output" in n]
+
+        def script_call(title, graph, inputs=None, previous=None, now=1000, expected=(), next_at=None):
+            return request(title, "POST", base + "/graphs/" + graph,
+                           {"inputs": inputs or {}, "state": previous, "now": now},
+                           predicate=lambda body: outputs(body, graph) == list(expected) and body["nextCallAt"] == next_at)
+
+        tick = script_call("A pure source yields immediately", "every5s", expected=[0], next_at=6000)
+        script_call("Calling before the source is due", "every5s", previous=tick["state"], now=5999, next_at=6000)
+        tick = script_call("Repeat five seconds later", "every5s", previous=tick["state"], now=6000,
+                           expected=[1], next_at=11000)
+        script_call("A late call schedules from its actual time", "every5s", previous=tick["state"], now=90000,
+                    expected=[2], next_at=95000)
+        silent = script_call("Wait before the first emission", "after5s", next_at=6000)
+        script_call("Resume after an initial wait", "after5s", previous=silent["state"], now=6000, expected=[42])
+        script_call("Expand a list into individual emissions", "eachNow", {"xs": [1, 2, 3]}, expected=[1, 2, 3])
+        script_call("Keep a whole list as one observable element", "wholeList", {"xs": [1, 2, 3]}, expected=[[1, 2, 3]])
+        script_call("An empty list completes without emissions", "eachNow", {"xs": []})
+        paced = script_call("Yield a batch before entering a loop", "paced", {"xs": [1, 2, 3, 4, 5, 6]},
+                            expected=[1, 2], next_at=3000)
+        script_call("The cursor is dormant before its wake-up", "paced", previous=paced["state"], now=2999, next_at=3000)
+        paced2 = script_call("A loop resumes inside its branch", "paced", previous=json.loads(json.dumps(paced["state"])),
+                             now=3000, expected=[4], next_at=4000)
+        paced3 = script_call("Advance to the next selected element", "paced", previous=paced2["state"], now=4000,
+                             expected=[6], next_at=5000)
+        script_call("The final wait completes the loop", "paced", previous=paced3["state"], now=5000)
+        restarted = script_call("New input restarts the sequential block", "paced", {"xs": [10, 20]},
+                                previous=paced["state"], now=2000, expected=[10, 20], next_at=4000)
+        script_call("An obsolete wake-up does not run", "paced", previous=restarted["state"], now=3000, next_at=4000)
+        script_call("The new invocation finishes", "paced", previous=restarted["state"], now=4000)
+        script_call("The short-list if branch", "selected", {"xs": [1, 2, 3]}, expected=[1, 2, 3])
+        script_call("The long-list else branch", "selected", {"xs": [1, 2, 3, 4]}, expected=[2, 4])
+        head = script_call("A match branch yields its head", "headThenTail", {"xs": [1, 2, 3]}, expected=[1], next_at=2000)
+        script_call("Resume the same match branch for the tail", "headThenTail", previous=head["state"], now=2000,
+                    expected=[2, 3])
+        script_call("An empty match branch completes", "headThenTail", {"xs": []})
+        bursts = script_call("First burst", "batches", {"xs": [1, 2, 3, 4]}, expected=[1, 2, 3, 4], next_at=3000)
+        bursts = script_call("Second filtered burst", "batches", previous=bursts["state"], now=3000,
+                             expected=[2, 4], next_at=4000)
+        script_call("Third reversed burst", "batches", previous=bursts["state"], now=4000, expected=[3, 2, 1])
+        total = script_call("A local accumulator before a wait", "runningTotal", {"xs": [2, 3, 4]},
+                            expected=[2], next_at=2000)
+        total = script_call("Reconstruct the local accumulator", "runningTotal", previous=total["state"], now=2000,
+                            expected=[5], next_at=3000)
+        total = script_call("Keep the reconstructed accumulated sum", "runningTotal", previous=total["state"], now=3000,
+                            expected=[9], next_at=4000)
+        script_call("Complete the accumulator's final wait", "runningTotal", previous=total["state"], now=4000)
+        bounded = script_call("Continue skips a zero", "bounded", {"xs": [0, 3, 0, 5, 11, 7]},
+                              expected=[3], next_at=2000)
+        bounded = script_call("Continue still works after a resume", "bounded", previous=bounded["state"], now=2000,
+                              expected=[5], next_at=3000)
+        script_call("Break ends before eleven", "bounded", previous=bounded["state"], now=3000)
+        pairs = script_call("Enter nested loops", "pairs", {"xs": [2, 3], "ys": [5, 7]}, expected=[10], next_at=1250)
+        for timestamp, value in [(1250, 14), (1500, 15), (1750, 21)]:
+            pairs = script_call("Resume nested loop variables", "pairs", previous=pairs["state"], now=timestamp,
+                                expected=[value], next_at=timestamp + 250)
+        script_call("Finish the nested loops", "pairs", previous=pairs["state"], now=2000)
+        fragment = script_call("Call a reusable producer fragment", "composed", {"xs": [1, 2, 3]},
+                               expected=[2], next_at=1500)
+        script_call("Compose a second fragment after a wait", "composed", previous=fragment["state"], now=1500,
+                    expected=[4])
+        cycle = script_call("Start a block with an internal wait", "sampleCycle", expected=[0], next_at=3000)
+        cycle = script_call("Resume within the same repeat cycle", "sampleCycle", previous=cycle["state"], now=3000,
+                            expected=[1], next_at=8000)
+        script_call("Start the next cycle five seconds after its end", "sampleCycle", previous=cycle["state"], now=8000,
+                    expected=[10], next_at=10000)
+        mixed = script_call("A structured emission holds a whole list", "mixed", {"xs": [1, 2, 3, 4]},
+                            expected=[{"items": [1, 2, 3, 4], "whole": True}], next_at=3000)
+        mixed = script_call("The same output type holds a selected item", "mixed", previous=mixed["state"], now=3000,
+                            expected=[{"items": [2], "whole": False}], next_at=4000)
+        mixed = script_call("Emit the next selected item", "mixed", previous=mixed["state"], now=4000,
+                            expected=[{"items": [4], "whole": False}], next_at=5000)
+        script_call("Finish the structured stream", "mixed", previous=mixed["state"], now=5000)
+        large = request("A large script burst retains caller-owned pending emissions", "POST", base + "/graphs/eachNow",
+                        {"inputs": {"xs": list(range(600))}, "now": 1000},
+                        predicate=lambda body: body["nextCallAt"] == 1000 and bool(body["state"]["pending"]))
+        values = outputs(large, "eachNow")
+        while large["nextCallAt"] is not None:
+            large = request("Drain another immediate burst step", "POST", base + "/graphs/eachNow",
+                            {"state": json.loads(json.dumps(large["state"])), "now": 1000})
+            values.extend(outputs(large, "eachNow"))
+        if values != list(range(600)):
+            raise AssertionError("large script burst lost or reordered emissions")
+
     files = {"input": "hello", **authority(effects=("FileSystem",))}
     request("Temporary files need permission", "POST", base + "/functions/writeRead", {"input": "hello"},
             predicate=lambda body: "permission denied: FileSystem" in body["error"])
@@ -192,20 +283,34 @@ def run_cookbook(client, project, console, quiet):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--transport", choices=("cli", "http"), default="cli")
-    parser.add_argument("--linen", type=Path, default=ROOT / ".lake/packages/linen")
+    parser.add_argument("--linen", type=Path, help="select a local Linen checkout instead of the locked dependency")
+    parser.add_argument("--producers", action="store_true", help="also compile sequential scripts (requires Linen's new Producer module)")
     parser.add_argument("--prepare", type=Path, help="copy a local-Linen project to this fresh folder, then exit")
     parser.add_argument("--quiet", action="store_true", help="verify the cookbook without printing each request/reply")
     args = parser.parse_args()
+    linen = args.linen or ROOT / ".lake/packages/linen"
     console = Console()
-    subprocess.run(["lake", "build", "lun"], cwd=ROOT, check=True, stdout=sys.stderr, stderr=sys.stderr)
     if args.prepare:
-        console.print(str(prepare_project(args.prepare, args.linen)), markup=False)
+        console.print(str(prepare_project(args.prepare, linen)), markup=False)
         return
     with tempfile.TemporaryDirectory(prefix="lun-guide-") as scratch:
         scratch = Path(scratch)
-        project = prepare_project(scratch / "project", args.linen)
+        build_command = ["lake", "build", "lun"]
+        if args.producers and args.linen is not None:
+            # The optional authoring module lives in the selected local checkout.
+            # Build the runner and project against the same library using Lake's
+            # per-invocation package override, including for unpublished refs.
+            overrides = scratch / "lake-overrides.json"
+            overrides.write_text(json.dumps({"version": "1.2.0", "packages": [{
+                "type": "path", "scope": "", "name": "linen", "inherited": False,
+                "dir": str(args.linen.resolve()), "manifestFile": "lake-manifest.json",
+                "configFile": "lakefile.lean",
+            }]}))
+            build_command.insert(1, "--packages=" + str(overrides))
+        subprocess.run(build_command, cwd=ROOT, check=True, stdout=sys.stderr, stderr=sys.stderr)
+        project = prepare_project(scratch / "project", linen)
         with Client(args.transport, scratch / "work", {"LUN_TEMP_ROOT": str(scratch / "temporary")}) as client:
-            checks = run_cookbook(client, project, console, args.quiet)
+            checks = run_cookbook(client, project, console, args.quiet, args.producers)
         console.print(f"{checks} cookbook checks passed over {args.transport}.")
 
 

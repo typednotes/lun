@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 455" role="img" aria-labelledby="title desc">
+  <title id="title">Changed input replaces the producer's current invocation</title>
+  <desc id="desc">The old list [1,2,3,4,5,6] emits 1 and 2 at 1000 and schedules 3000. A changed input [10,20] at 2000 cancels the old cursor and pending emissions, emits 10 and 20 immediately, and schedules 4000. Calling at the obsolete 3000 timestamp does no work. At 4000 the new invocation completes.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#507346" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="455" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">A changed input starts a fresh sequential block</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">Latest-input behavior: the new invocation replaces the old continuation and queued values.</text>
+    <text x="40" y="133" font-size="14" font-weight="700">OLD INPUT</text>
+    <rect x="175" y="105" width="245" height="91" rx="9" fill="#fff" stroke="#d5ddd5"/>
+    <text x="195" y="134" font-size="15" font-family="monospace">[1,2,3,4,5,6]</text><text x="195" y="170" font-size="20" font-weight="700">1000: yield 1, 2</text>
+    <path d="M422 150 H736" fill="none" stroke="#b9c3ba" stroke-width="2" stroke-dasharray="6 5"/>
+    <rect x="740" y="105" width="340" height="91" rx="9" fill="#f5e9e3" stroke="#c5a090"/>
+    <text x="760" y="135" font-size="17" fill="#87513e">3000: old wake-up cancelled</text><text x="760" y="170" font-size="16" fill="#87513e">Calling now performs no producer work.</text>
+    <text x="40" y="271" font-size="14" font-weight="700">NEW INPUT</text>
+    <rect x="445" y="236" width="245" height="103" rx="9" fill="#e1eedb" stroke="#78956e"/>
+    <text x="465" y="265" font-size="15" font-family="monospace">[10,20]</text><text x="465" y="301" font-size="20" font-weight="700">2000: yield 10, 20</text><text x="465" y="326" font-size="15">New cursor · nextCallAt: 4000</text>
+    <path d="M692 286 H811" fill="none" stroke="#507346" stroke-width="2.5" marker-end="url(#arrow)"/>
+    <rect x="815" y="236" width="265" height="103" rx="9" fill="#fff" stroke="#d5ddd5"/>
+    <text x="835" y="270" font-size="22" font-weight="700">4000: complete</text><text x="835" y="301" font-size="16">No remaining loop elements</text><text x="835" y="326" font-size="15" font-family="monospace">nextCallAt: null</text>
+    <path d="M567 236 V150" fill="none" stroke="#87513e" stroke-width="2"/>
+    <path d="M558 141 L576 159 M576 141 L558 159" stroke="#87513e" stroke-width="3"/>
+    <text x="465" y="219" font-size="15" fill="#87513e">replace old invocation</text>
+    <text x="40" y="388" font-size="17">Persist and resume the new state; its nextCallAt replaces the scheduler's old timestamp.</text>
+    <text x="40" y="419" font-size="16" fill="#56655d">Sending an unchanged input does not create an argument event and does not restart the producer.</text>
+  </g>
+</svg>

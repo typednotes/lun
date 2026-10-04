@@ -1708,13 +1708,15 @@ def checkGraph (programName errorName : Name) (inputConstructor : Option Name :=
 declare_syntax_cat lunInputConstraint
 syntax " using_input " ident : lunInputConstraint
 
-/-- `lun_graph "name" := r#"program"#` — define the graph `LunDriver.Programs.name`
+/-- `lun_graph "name" := r#"program"#` — define the graph `LunDriver.Programs.name.«#program»`
     from a `Reactive` program over the declared functions (and, checked,
     `LunDriver.Graphs.name`), then check it. -/
 elab "lun_graph " name:str inputDecl:(lunInputConstraint)? " := " prog:str : command => do
   let t ← parseEmbeddedTerm prog
   let n := dottedName name.getString
-  let programName := `LunDriver.Programs ++ n
+  -- A public graph/function name may coincide. An internal final component
+  -- prevents Lean from resolving an application as this definition's recursion.
+  let programName := Name.str (`LunDriver.Programs ++ n) "#program"
   let graphName := `LunDriver.Graphs ++ n
   let errorName := `LunDriver.GraphErrors ++ n
   let programId := mkIdent programName

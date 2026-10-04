@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 475" role="img" aria-labelledby="title desc">
+  <title id="title">Yield in a branch and loop, with waits between emissions</title>
+  <desc id="desc">For input [1,2,3,4,5,6], paced emits 1 and 2 at now 1000, waits two seconds, skips odd 3 and emits 4 at 3000, waits one second, skips 5 and emits 6 at 4000, then completes its final wait at 5000. Each call returns its cursor and next-call timestamp.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#507346" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="475" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">One block, four scheduled calls</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">Input [1,2,3,4,5,6] · each call supplies the previous JSON state.</text>
+    <g data-card="first"><rect x="40" y="115" width="235" height="153" rx="9" fill="#e1eedb" stroke="#78956e"/><text x="60" y="143" font-size="13" fill="#507346">CALL 1 / now = 1000</text><text x="60" y="185" font-size="28" font-weight="700">yield 1, 2</text><text x="60" y="218" font-size="16">Immediate prefix</text><text x="60" y="246" font-size="16" font-family="monospace">nextCallAt: 3000</text></g>
+    <g data-card="second"><rect x="355" y="115" width="235" height="153" rx="9" fill="#e1eedb" stroke="#78956e"/><text x="375" y="143" font-size="13" fill="#507346">CALL 2 / now = 3000</text><text x="375" y="185" font-size="28" font-weight="700">yield 4</text><text x="375" y="218" font-size="16">Skip 3 in the loop</text><text x="375" y="246" font-size="16" font-family="monospace">nextCallAt: 4000</text></g>
+    <g data-card="third"><rect x="660" y="115" width="235" height="153" rx="9" fill="#e1eedb" stroke="#78956e"/><text x="680" y="143" font-size="13" fill="#507346">CALL 3 / now = 4000</text><text x="680" y="185" font-size="28" font-weight="700">yield 6</text><text x="680" y="218" font-size="16">Skip 5 in the loop</text><text x="680" y="246" font-size="16" font-family="monospace">nextCallAt: 5000</text></g>
+    <g data-card="fourth"><rect x="950" y="115" width="130" height="153" rx="9" fill="#fff" stroke="#d5ddd5"/><text x="965" y="143" font-size="13" fill="#507346">CALL 4</text><text x="965" y="185" font-size="23" font-weight="700">done</text><text x="965" y="218" font-size="16">now = 5000</text><text x="965" y="246" font-size="16">next: null</text></g>
+    <g fill="none" stroke="#507346" stroke-width="2.5" marker-end="url(#arrow)"><path d="M277 191 H349"/><path d="M592 191 H654"/><path d="M897 191 H944"/></g>
+    <text x="290" y="174" font-size="16" fill="#507346">2 s</text><text x="611" y="174" font-size="16" fill="#507346">1 s</text><text x="906" y="174" font-size="16" fill="#507346">1 s</text>
+    <path d="M60 314 H1060" fill="none" stroke="#b9c3ba" stroke-width="2"/>
+    <g fill="#507346"><circle cx="157" cy="314" r="5"/><circle cx="472" cy="314" r="5"/><circle cx="777" cy="314" r="5"/><circle cx="1015" cy="314" r="5"/></g>
+    <text x="82" y="345" font-size="16">double: 2, 4</text><text x="407" y="345" font-size="16">double: 8</text><text x="709" y="345" font-size="16">double: 12</text><text x="963" y="345" font-size="16">no output</text>
+    <rect x="40" y="379" width="1040" height="65" rx="9" fill="#22312a"/>
+    <text x="60" y="406" font-size="16" fill="#fff">Producer.wait 2000 / 1000 saves a cursor and requests the next call.</text>
+    <text x="60" y="432" font-size="16" fill="#cbd9ca">The application waits and invokes Lun again. The last wait must also finish before the block completes.</text>
+  </g>
+</svg>

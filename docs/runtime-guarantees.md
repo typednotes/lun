@@ -34,7 +34,7 @@ request, never from caller-owned graph state.
 The earlier integration verification describes the coordinated **Lun 0.3.0 / Lode 0.3.0 /
 Typednotes 0.6.0 / Linen 1.10.0 / Liaison 0.6.0** release. Package locks and
 runtime/image defaults for that release use these versions. The current runner
-uses Linen 1.11.0 and the stateless contract above; callers of the historical
+uses Linen 1.12.0 and the stateless contract above; callers of the historical
 session API must adopt the graph-step API. Local release tags require publication
 before deployment. The native app/writer/runtime integration has passed local verification.
 

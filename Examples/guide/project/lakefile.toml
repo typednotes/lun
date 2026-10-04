@@ -4,7 +4,10 @@ defaultTargets = ["Tutorial"]
 [[require]]
 name = "linen"
 git = "https://github.com/typednotes/linen"
-rev = "v1.11.0"
+rev = "v1.12.0"
 
 [[lean_lib]]
 name = "Tutorial"
+
+[[lean_lib]]
+name = "Producers"

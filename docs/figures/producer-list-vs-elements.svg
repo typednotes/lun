@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 465" role="img" aria-labelledby="title desc">
+  <title id="title">Yield one list or yield each element</title>
+  <desc id="desc">yield [1,2,3] emits one List Nat value and sum runs once to produce 6. yieldAll [1,2,3] emits three Nat values; double runs for each to produce 2,4,6. The last snapshot is 6 in both examples, but their event streams are different.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#507346" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="465" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">One list value, or a stream of its elements?</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">The observable element type decides what each downstream call receives.</text>
+    <rect x="40" y="112" width="355" height="104" rx="9" fill="#fff" stroke="#d5ddd5"/>
+    <text x="60" y="140" font-size="13" fill="#507346">WHOLE LIST / Observable (List Nat)</text>
+    <text x="60" y="177" font-size="20" font-family="monospace">Producer.yield [1,2,3]</text>
+    <rect x="450" y="128" width="195" height="72" rx="9" fill="#e1eedb" stroke="#78956e"/>
+    <text x="480" y="172" font-size="24" font-family="monospace">[1,2,3]</text>
+    <rect x="700" y="128" width="160" height="72" rx="9" fill="#fff" stroke="#d5ddd5"/>
+    <text x="728" y="171" font-size="20" font-family="monospace">sum</text>
+    <text x="921" y="172" font-size="26" font-weight="700">6</text>
+    <text x="985" y="172" font-size="16" fill="#56655d">one call</text>
+    <rect x="40" y="247" width="355" height="116" rx="9" fill="#fff" stroke="#d5ddd5"/>
+    <text x="60" y="275" font-size="13" fill="#507346">EACH ELEMENT / Observable Nat</text>
+    <text x="60" y="312" font-size="20" font-family="monospace">Producer.yieldAll [1,2,3]</text>
+    <text x="60" y="341" font-size="16" fill="#56655d">Same step, in order</text>
+    <g fill="#e1eedb" stroke="#78956e"><rect x="450" y="265" width="55" height="72" rx="9"/><rect x="520" y="265" width="55" height="72" rx="9"/><rect x="590" y="265" width="55" height="72" rx="9"/></g>
+    <g font-size="24" font-family="monospace"><text x="469" y="309">1</text><text x="539" y="309">2</text><text x="609" y="309">3</text></g>
+    <rect x="700" y="265" width="160" height="72" rx="9" fill="#fff" stroke="#d5ddd5"/>
+    <text x="720" y="308" font-size="20" font-family="monospace">double</text>
+    <text x="903" y="309" font-size="24" font-family="monospace">2, 4, 6</text>
+    <text x="905" y="348" font-size="16" fill="#56655d">three calls</text>
+    <g fill="none" stroke="#507346" stroke-width="2.5" marker-end="url(#arrow)"><path d="M397 164 H446"/><path d="M647 164 H696"/><path d="M862 164 H900"/><path d="M397 301 H446"/><path d="M647 301 H696"/><path d="M862 301 H894"/></g>
+    <text x="40" y="414" font-size="17">Both final downstream snapshots are 6. Their ordered outcome changes tell different stories.</text>
+    <text x="40" y="440" font-size="16" fill="#56655d">Equal consecutive payloads still propagate; unchanged outcomes are omitted from changed.</text>
+  </g>
+</svg>

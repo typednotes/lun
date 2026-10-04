@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 470" role="img" aria-labelledby="title desc">
+  <title id="title">Three layers: producer code, observable wiring, caller-owned execution</title>
+  <desc id="desc">Pure Lean producers yield payloads. A Reactive program builds typed Observable references into a checked DAG. Lun executes that DAG from caller-supplied JSON state; the application persists the returned state and schedules nextCallAt.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#507346" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="470" rx="16" fill="#f7f8f5"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#22312a">
+    <text x="40" y="47" font-size="28" font-weight="700">Write payload code. Wire streams. Schedule steps.</text>
+    <text x="40" y="78" font-size="16" fill="#56655d">Observable is a typed node reference; Reactive constructs the graph.</text>
+    <g data-card="implementation">
+      <rect x="40" y="115" width="310" height="223" rx="10" fill="#fff" stroke="#d5ddd5"/>
+      <text x="60" y="146" font-size="13" fill="#507346">1 / LEAN IMPLEMENTATION</text>
+      <text x="60" y="184" font-size="22" font-weight="700">Actual values</text>
+      <text x="60" y="219" font-size="16" font-family="monospace">xs : List Nat</text>
+      <text x="60" y="250" font-size="16" font-family="monospace">Producer.yieldAll xs</text>
+      <text x="60" y="292" font-size="16">Branches, loops and waits</text>
+      <text x="60" y="317" font-size="16" fill="#56655d">Lowered to a resumable step</text>
+    </g>
+    <g data-card="graph">
+      <rect x="405" y="115" width="310" height="223" rx="10" fill="#e1eedb" stroke="#78956e"/>
+      <text x="425" y="146" font-size="13" fill="#507346">2 / REACTIVE GRAPH PROGRAM</text>
+      <text x="425" y="184" font-size="22" font-weight="700">Typed wiring</text>
+      <text x="425" y="219" font-size="16" font-family="monospace">xs : Observable (List Nat)</text>
+      <text x="425" y="250" font-size="16" font-family="monospace">item ← eachNow xs</text>
+      <text x="425" y="292" font-size="16">input → eachNow → double</text>
+      <text x="425" y="317" font-size="16" fill="#56655d">One DAG, shared nodes</text>
+    </g>
+    <g data-card="execution">
+      <rect x="770" y="115" width="310" height="223" rx="10" fill="#fff" stroke="#d5ddd5"/>
+      <text x="790" y="146" font-size="13" fill="#507346">3 / CALLER + LUN EXECUTION</text>
+      <text x="790" y="184" font-size="22" font-weight="700">JSON steps</text>
+      <text x="790" y="219" font-size="16" font-family="monospace">inputs + state + now</text>
+      <text x="790" y="250" font-size="16" font-family="monospace">changed + nextCallAt</text>
+      <text x="790" y="292" font-size="16">Persist the returned state</text>
+      <text x="790" y="317" font-size="16" fill="#56655d">Invoke again when due</text>
+    </g>
+    <g fill="none" stroke="#507346" stroke-width="2.5" marker-end="url(#arrow)"><path d="M352 226 H398"/><path d="M717 226 H763"/></g>
+    <rect x="40" y="370" width="1040" height="65" rx="9" fill="#22312a"/>
+    <text x="60" y="397" font-size="16" fill="#fff">Lun runs the checked DAG incrementally. Every producer emission visits its downstream functions.</text>
+    <text x="60" y="422" font-size="16" fill="#cbd9ca">Warm workers retain compiled code; the application owns execution state and the scheduler.</text>
+  </g>
+</svg>

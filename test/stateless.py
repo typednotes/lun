@@ -113,6 +113,39 @@ pending = call("bursty", inputs={"x": 600})
 cancelled = call("bursty", pending["state"], {"x": 2})
 assert outputs(cancelled, "burst") == [0, 1] and cancelled["nextCallAt"] is None
 
+# Pure sequential scripts use the same checked producer interface and JSON state.
+script = call("paced", inputs={"xs": [1, 2, 3, 4, 5, 6]})
+assert outputs(script, "paced") == [1, 2] and script["nextCallAt"] == 3000
+assert call("paced", script["state"], now=2999)["changed"] == []
+script2 = call("paced", json.loads(json.dumps(script["state"])), now=3000)
+assert outputs(script2, "paced") == [7] and outputs(script2, "render") == ["#7"]
+assert script2["nextCallAt"] == 4000
+script3 = call("paced", script2["state"], now=4000)
+assert outputs(script3, "paced") == [18] and script3["nextCallAt"] == 5000
+script4 = call("paced", script3["state"], now=5000)
+assert outputs(script4, "paced") == [118] and script4["nextCallAt"] is None
+assert call("paced", script4["state"], now=6000)["changed"] == []
+restarted = call("paced", script["state"], {"xs": [10, 20]}, now=2000)
+assert outputs(restarted, "paced") == [10, 20] and restarted["nextCallAt"] == 4000
+assert outputs(call("paced", restarted["state"], now=4000), "paced") == [100]
+script_tick = call("every5s")
+assert outputs(script_tick, "every5s") == [0] and script_tick["nextCallAt"] == 6000
+script_tick2 = call("every5s", script_tick["state"], now=6000)
+assert outputs(script_tick2, "every5s") == [1] and script_tick2["nextCallAt"] == 11000
+late_tick = call("every5s", script_tick2["state"], now=90000)
+assert outputs(late_tick, "every5s") == [2] and late_tick["nextCallAt"] == 95000
+assert outputs(call("wholeList", inputs={"xs": [1, 2, 3]}), "wholeList") == [[1, 2, 3]]
+repeats = call("eachNow", inputs={"xs": [2, 2, 1, 2]})
+assert outputs(repeats, "eachNow") == [2, 1, 2]
+assert repeats["log"].count("adding 2 and 10") == 3  # all elements propagated
+script_burst = call("eachNow", inputs={"xs": list(range(600))})
+script_values = outputs(script_burst, "eachNow")
+while script_burst["nextCallAt"] is not None:
+    assert script_burst["nextCallAt"] == 1000
+    script_burst = call("eachNow", json.loads(json.dumps(script_burst["state"])))
+    script_values.extend(outputs(script_burst, "eachNow"))
+assert script_values == list(range(600))
+
 # Malformed state is validated before a producer can execute an effect.
 malformed = copy.deepcopy(tick["state"])
 malformed["continuations"][1]["value"] = "not a Nat"
@@ -123,6 +156,9 @@ call("bursty", malformed, status=400)
 malformed = copy.deepcopy(timed["state"])
 malformed["outcomes"][0] = {"output": "not a Nat"}
 call("timed", malformed, status=400)
+malformed = copy.deepcopy(script["state"])
+malformed["continuations"][1]["value"] = {"position": "not a Nat"}
+call("paced", malformed, now=3000, status=400)
 malformed = copy.deepcopy(timed["state"])
 malformed["contract"] = "old-runtime"
 call("timed", malformed, status=400)
@@ -136,4 +172,4 @@ injected["policy"] = authority["policy"]
 injected["_runtime"] = {"SECRETS_PASSWORD": "fake"}
 denied_injected = call("timed", injected, now=121000, policy={"effects": [], "domains": []})
 assert "permission denied" in denied_injected["nodes"][1]["error"]
-print(f"ok - {checks} compiled stateless execution cases, SQLite persistence, bursts and minute-separated results")
+print(f"ok - {checks} compiled stateless execution cases, SQLite persistence, sequential scripts, bursts and scheduled results")

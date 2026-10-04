@@ -7,15 +7,15 @@ signature) and one per **graph** of functions (a program in linen's
 inputs, receives changed values, updated state and `nextCallAt`, persists state
 in its database, and schedules further calls. Lun retains compiled code in warm
 workers, never execution records. See `README.md` and `docs/user-guide.md`.
-Current runner release: **Lun 0.4.0**, with Linen 1.11.0 and Liaison's pure
+Current runner release: **Lun 0.4.1**, with Linen 1.12.0 and Liaison's pure
 0.6.0 SDK. The release set below records the earlier whole-pipeline verification.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
 Coordinated release set: **Lun 0.3.0 / Lode 0.3.0 / Typednotes 0.6.0 /
 Linen 1.10.0 / Liaison 0.6.0**. The current driver requires the Linen connector
 APIs and Liaison's pure `Liaison.Wire` SDK; the historical 1.3.0 Reactive minimum
-is not sufficient for this runtime. Package locks and image/default pins use this
-set. Publishing the local release tags and deploying remain the user's actions.
+is not sufficient for this runtime. Package locks and image/default pins use the
+current runner's dependency versions. Publishing the local release tags and deploying remain the user's actions.
 
 ## Layout
 

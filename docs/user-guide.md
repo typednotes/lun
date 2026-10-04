@@ -9,7 +9,12 @@ the state, database, and scheduler; Lun owns compilation and execution.
 This guide explains that workflow from the user's side. It includes a
 [complete runnable cookbook](../Examples/guide/README.md), rather than requiring
 you to assemble all the snippets yourself. The examples target this checkout's
-CLI/HTTP API and coordinated Linen 1.11.0 runtime.
+CLI/HTTP API and coordinated Linen 1.12.0 runtime.
+
+The [sequential producer recipes](#sequential-producers-yield-inside-branches-and-loops)
+use `Linen.Control.Monad.Effect.Producer`, introduced in Linen 1.12.0.
+Their optional cookbook extension uses the locked dependency; `--linen ../linen`
+selects the sibling checkout for local development before publishing its tag.
 
 ## Contents
 
@@ -21,7 +26,9 @@ CLI/HTTP API and coordinated Linen 1.11.0 runtime.
 6. [Use the same operations over HTTP](#6-use-the-same-operations-over-http)
 7. [Function recipes](#7-function-recipes)
 8. [Graph recipes](#8-graph-recipes)
+   - [How Linen Observable and Reactive are used](#how-linen-observable-and-reactive-are-used)
 9. [Stateless execution, persistence, and scheduling](#9-stateless-execution-persistence-and-scheduling)
+   - [Sequential producers: yields, branches, loops, and waits](#sequential-producers-yield-inside-branches-and-loops)
 10. [Errors and recovery](#10-errors-and-recovery)
 11. [Types and wiring contracts](#11-types-and-wiring-contracts)
 12. [Effects and permissions](#12-effects-and-permissions)
@@ -112,6 +119,17 @@ graphs, partial inputs, unchanged inputs, error recovery, delayed producers, sco
 files, permission denials, and compile-time contract failures. The HTTP and
 connector denial examples do not contact an external provider.
 
+To also verify fourteen sequential producer recipes:
+
+```sh
+uv run Examples/guide/run.py --producers
+uv run Examples/guide/run.py --producers --transport http
+```
+
+These examples advance an explicit test clock, so five-second waits are verified
+without waiting five real seconds. Add `--quiet` for the verification summary.
+Add `--linen ../linen` to use the local dependency checkout before its tag is published.
+
 The cookbook client waits for HTTP builds and presents terminal build failures
 with the same `422` status as the synchronous CLI. The raw REST submission/polling
 statuses are explained in [section 6](#6-use-the-same-operations-over-http).
@@ -153,7 +171,7 @@ defaultTargets = ["Tutorial"]
 [[require]]
 name = "linen"
 git = "https://github.com/typednotes/linen"
-rev = "v1.11.0"
+rev = "v1.12.0"
 
 [[lean_lib]]
 name = "Tutorial"
@@ -638,6 +656,70 @@ operators such as `map`, `filter`, `scan`, and timed operators are refused in a
 Lun graph. Functions execute sequentially; independent branches describe
 dependencies, not a promise of parallel execution.
 
+### How Linen Observable and Reactive are used
+
+![Lean node implementations, typed Observable wiring, and caller-owned execution are three connected layers.](figures/reactive-layers.svg)
+
+**`Observable α` is a typed reference to a graph node that emits `α` values.**
+It is not the current `α` payload, a list of historic values, or a running
+subscription. Linen's `Reactive m V` monad builds the DAG: its nodes, argument
+edges, function table, and labels. Each node is shared by all its dependents.
+
+In a Lun graph program:
+
+```lean
+do
+  let xs ← input "xs" (List Nat) -- xs : Observable (List Nat)
+  let item ← eachNow xs         -- item : Observable Nat
+  let doubled ← double item    -- doubled : Observable Nat
+  render doubled               -- result : Observable String
+```
+
+There are two different meanings of function application here:
+
+- In your project, `Tutorial.double` accepts a `Nat` and computes `Eff [] Nat`.
+- In a graph, Lun's generated `double` accepts `Observable Nat` and creates a
+  node in `Reactive`. It runs the checked implementation when an upstream
+  occurrence arrives. A producer gets the same graph interface, with its
+  **element type** as the output observable type.
+
+Conceptually, the generated interfaces are:
+
+```lean
+input   : String → (α : Type) → LunDriver.GraphM (Observable α)
+double  : Observable Nat → LunDriver.GraphM (Observable Nat)
+eachNow : Observable (List Nat) → LunDriver.GraphM (Observable Nat)
+every5s : LunDriver.GraphM (Observable Nat)
+```
+
+The producer's `now` and continuation arguments belong to execution, so graph
+programs do not supply them. Similarly, graph expressions such as `xs.filter`
+do not filter a payload list: `xs` is a node reference. Put payload-level
+branches, list operations and loops inside the declared function or producer.
+
+Lun builds these applications using Linen's `combineLatest` graph shape. A
+two-argument function reads the latest successful value of both argument
+nodes; it waits until both have outcomes. Every new argument occurrence can
+invoke it. A diamond is visited in topological order, so its join sees both
+updated branches before it runs. Several producer emissions are distinct
+occurrences, even when they share the same request timestamp.
+
+Linen itself also provides `Observable.map`, `filter`, `scan`, `zip`, timed
+operators, virtual-time `Graph.run`, and incremental `Session` execution. Those
+are useful in standalone Linen programs. **Lun accepts the restricted graph
+of named inputs and declared function applications**, checks and rebinds its
+implementations, and runs its own caller-state incremental executor over the
+validated DAG. Its workers retain code; the caller's JSON carries outcomes,
+producer cursors and pending emissions. A wait is driven by `nextCallAt` and
+the caller's scheduler.
+
+As a result, emitting a value runs downstream applications; it does not create
+another graph node. One `eachNow` node can emit hundreds of elements. The
+response's `changed` sequence reports outcome changes and its `nodes` field
+reports the last snapshot. There is no separate subscribe/unsubscribe protocol:
+the caller starts with fresh state, resumes with saved state, and stops a
+logical execution by stopping its own scheduling.
+
 ### Two independent branches
 
 ![The parallel graph has a numeric n-to-double-to-render branch and a name-to-greet branch.](figures/parallel-graph.svg)
@@ -871,6 +953,381 @@ Lun processes at most 256 queued emissions/wake-ups after the supplied inputs
 per call. Larger bursts retain their remaining work in `state` and return
 `nextCallAt` equal to `state.now`, requesting another immediate call. No
 emissions are discarded or hidden in a worker.
+
+### Sequential producers: yield inside branches and loops
+
+The low-level step above is useful for explicit typed state and effects.
+For **pure sequential code**, `Producer.run` lowers a normal `do` block to
+that same producer signature. You can yield once, yield every element of a
+list, branch, enter nested loops, and wait between any of those operations.
+
+All fourteen examples below are available in
+[`Examples/guide/project/Producers.lean`](../Examples/guide/project/Producers.lean).
+They use these imports and namespace:
+
+```lean
+import Linen.Control.Monad.Effect.Producer
+
+namespace Tutorial
+open Control.Monad.Effect
+-- Definitions below go here.
+end Tutorial
+```
+
+`Producer.yield value` emits **one element**. `Producer.yieldAll values` emits
+**each element**, in order. `Producer.wait milliseconds` suspends the block
+until a future graph call. A zero wait continues immediately. Code after a
+positive wait resumes only when the caller supplies the saved graph state on
+a due call.
+
+#### 1. Emit every list element immediately
+
+```lean
+def eachNow (xs : List Nat) := Producer.run do
+  Producer.yieldAll xs
+```
+
+With `xs = [1, 2, 3]`, this emits `1`, `2`, `3` in order in the same step,
+subject to Lun's bounded burst draining. The invocation then completes.
+An empty list emits nothing and completes.
+
+#### 2. Emit the whole list as one value
+
+```lean
+def wholeList (xs : List Nat) := Producer.run do
+  Producer.yield xs
+```
+
+Here the emitted type is `List Nat`: the only output is `[1, 2, 3]`.
+Its step result therefore contains a `List (List Nat)` of emissions.
+
+![yield of a list is one list-valued occurrence, while yieldAll emits three Nat occurrences, each reaching downstream nodes.](figures/producer-list-vs-elements.svg)
+
+The graph wiring follows that distinction:
+
+```lean
+-- Individual elements: eachNow xs produces Observable Nat.
+do
+  let xs ← input "xs" (List Nat)
+  let item ← eachNow xs
+  double item
+
+-- One whole list: wholeList xs produces Observable (List Nat).
+do
+  let xs ← input "xs" (List Nat)
+  let batch ← wholeList xs
+  sum batch
+```
+
+For `[1, 2, 3]`, `double` produces `2`, `4`, `6`; `sum` runs once and produces `6`.
+
+#### 3. Pure source every five seconds
+
+```lean
+def every5s := Producer.every 5000 fun n => do
+  Producer.yield n
+```
+
+This emits `0` immediately, waits five seconds, emits `1`, and continues.
+`n` is the zero-based cycle number. `every` repeats a finite block and adds
+the period after that block completes, resetting its cursor each cycle.
+A zero period is treated as the minimum positive delay of one millisecond.
+
+Its graph has no external inputs:
+
+```lean
+do
+  let tick ← every5s
+  render tick
+```
+
+Initialize at `now = 1000`: the source emits `0` and asks for `6000`.
+At `6000` it emits `1` and asks for `11000`. A late invocation at `90000`
+emits the next counter once and asks for `95000`; it does not replay missed
+wall-clock ticks.
+
+#### 4. Wait before the first emission
+
+```lean
+def after5s := Producer.run do
+  Producer.wait 5000
+  Producer.yield (42 : Nat)
+```
+
+At `now = 1000` it emits nothing and requests `6000`. On that due call it
+emits `42` and completes. An initial silent wait is useful when starting a
+delayed task rather than an immediately active source.
+
+#### 5. An immediate prefix, then selected elements in a paced loop
+
+```lean
+def paced (xs : List Nat) := Producer.run do
+  Producer.yieldAll (xs.take 2)
+  Producer.wait 2000
+  for x in xs.drop 2 do
+    if x % 2 == 0 then
+      Producer.yield x
+      Producer.wait 1000
+```
+
+![The paced producer emits 1 and 2 at the first call, 4 after two seconds, 6 one second later, and completes after its final wait.](figures/producer-timeline.svg)
+
+With `[1, 2, 3, 4, 5, 6]` and `now = 1000`:
+
+- At `1000`: emit `1`, `2`; schedule `3000`.
+- At `3000`: skip `3`, emit `4`; schedule `4000`.
+- At `4000`: skip `5`, emit `6`; schedule `5000`.
+- At `5000`: finish the final wait and loop; `nextCallAt` becomes `null`.
+
+The final wait really is part of the program. Put waits **before** emissions
+if you want every element delayed; put them after emissions if you also want
+to wait after the final element. Values become available to downstream nodes
+at each emission, rather than only at loop completion.
+
+#### 6. Yield from either branch of a test
+
+```lean
+def selected (xs : List Nat) := Producer.run do
+  if xs.length <= 3 then
+    Producer.yieldAll xs
+  else
+    Producer.yieldAll (xs.filter fun x => x % 2 == 0)
+```
+
+`[1, 2, 3]` emits all three elements; `[1, 2, 3, 4]` emits only `2`, `4`.
+Either branch may also call `wait`, `yield`, or another producer fragment.
+
+#### 7. Yield and wait inside a match branch
+
+```lean
+def headThenTail (xs : List Nat) := Producer.run do
+  match xs with
+  | [] => pure ()
+  | first :: rest =>
+    Producer.yield first
+    Producer.wait 1000
+    Producer.yieldAll rest
+```
+
+`[1, 2, 3]` emits `1` immediately, then `2`, `3` one second later. The
+branch-local `rest` is reconstructed correctly when execution resumes.
+
+#### 8. Separate bursts by waits
+
+```lean
+def batches (xs : List Nat) := Producer.run do
+  Producer.yieldAll xs
+  Producer.wait 2000
+  Producer.yieldAll (xs.filter fun x => x % 2 == 0)
+  Producer.wait 1000
+  Producer.yieldAll xs.reverse
+```
+
+For `[1, 2, 3, 4]`, the emissions are `[1, 2, 3, 4]` now, `[2, 4]` after
+two seconds, then `[4, 3, 2, 1]` after another second. These are three bursts
+of individual `Nat` values, not three list-valued emissions.
+
+The first `4` in the final burst equals the node's previous value. It still
+propagates downstream, but that unchanged outcome is absent from `changed`.
+For an event consumer that must distinguish equal payloads, emit a record with
+a sequence number as part of the value.
+
+#### 9. Keep loop-local accumulators across waits
+
+```lean
+def runningTotal (xs : List Nat) := Producer.run do
+  let mut total := 0
+  for x in xs do
+    total := total + x
+    Producer.yield total
+    Producer.wait 1000
+```
+
+For `[2, 3, 4]`, the outputs are `2`, `5`, `9`, one second apart.
+Ordinary pure locals and loop variables are reconstructed from the same
+arguments and cursor; you do not write a continuation record for each local.
+
+#### 10. Continue and break in a finite loop
+
+```lean
+def bounded (xs : List Nat) := Producer.run do
+  for x in xs do
+    if x == 0 then continue
+    if x > 10 then break
+    Producer.yield x
+    Producer.wait 1000
+```
+
+For `[0, 3, 0, 5, 11, 7]`, this emits `3`, then `5` one second later,
+and finishes on the next call. Zeroes are skipped; `11` ends the loop before
+either it or `7` is emitted.
+
+#### 11. Nested loops with a short delay
+
+```lean
+def pairs (xs ys : List Nat) := Producer.run do
+  for x in xs do
+    for y in ys do
+      Producer.yield (x * y)
+      Producer.wait 250
+```
+
+For `xs = [2, 3]` and `ys = [5, 7]`, it emits `10`, `14`, `15`, `21`,
+250 milliseconds apart. Both loop positions survive a resume. Graph wiring
+supplies two observables, while the producer implementation receives their
+current `List Nat` payloads.
+
+#### 12. Compose reusable sequential fragments
+
+```lean
+def emitEven (xs : List Nat) : Producer.Script Nat Unit := do
+  for x in xs do
+    if x % 2 == 0 then Producer.yield x
+
+def composed (xs : List Nat) := Producer.run do
+  emitEven xs
+  Producer.wait 500
+  emitEven (xs.map (· + 1))
+```
+
+The fragment is a `Script`, not another graph node. `Producer.run` lowers
+the composed block once. With `[1, 2, 3]`, it emits `2` initially, then `2`,
+`4` after 500 ms; the repeated `2` propagates but is omitted from `changed`.
+
+#### 13. Wait inside a repeating block
+
+```lean
+def sampleCycle := Producer.every 5000 fun n => do
+  Producer.yield (n * 10)
+  Producer.wait 2000
+  Producer.yield (n * 10 + 1)
+```
+
+Starting at `1000`, it emits `0`, emits `1` at `3000`, and starts its next
+cycle with `10` at `8000`. The two-second internal wait stays within the
+cycle; the five-second repeat delay starts after the block ends.
+
+Use finite blocks with `every` for an unbounded logical lifetime. Each call
+still completes promptly, and the caller schedules the next step.
+
+#### 14. Emit a full list and selected items from the same node
+
+A node has one fixed element type. Choose a shared schema when whole batches
+and individual items need different meanings:
+
+```lean
+structure Emission where
+  items : List Nat
+  whole : Bool
+  deriving Lean.ToJson, Lean.FromJson
+
+def mixed (xs : List Nat) := Producer.run do
+  Producer.yield ({ items := xs, whole := true } : Emission)
+  Producer.wait 2000
+  for x in xs do
+    if x % 2 == 0 then
+      Producer.yield ({ items := [x], whole := false } : Emission)
+      Producer.wait 1000
+```
+
+For `[1, 2, 3, 4]`, the observable emits
+`{"items":[1,2,3,4],"whole":true}`, then
+`{"items":[2],"whole":false}` two seconds later, then
+`{"items":[4],"whole":false}` a second later. Declare `outputType` as
+`Tutorial.Emission`; downstream nodes accept that record type.
+
+#### Declare the lowered step and wire its observable
+
+The inferred type of `paced` has the same producer shape as a manual step:
+
+```lean
+List Nat → Nat → Option Producer.Cursor →
+  Eff [] (List Nat × Producer.Cursor × Option Nat)
+```
+
+Add its declaration to the build's `functions`:
+
+```json
+{
+  "name": "paced",
+  "module": "Producers",
+  "function": "Tutorial.paced",
+  "signature": "List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)",
+  "producer": true,
+  "outputType": "Nat"
+}
+```
+
+`every` uses `Producer.CycleCursor` instead of `Producer.Cursor`. Its source
+signature has no graph arguments:
+
+```lean
+Nat → Option Producer.CycleCursor →
+  Eff [] (List Nat × Producer.CycleCursor × Option Nat)
+```
+
+Keep `Producers.lean` discoverable by Lake: this cookbook declares a second
+`[[lean_lib]]` with `name = "Producers"`. A module under your existing library
+prefix, such as `MyProject.Producers`, can instead live in that library.
+
+The complete function/graph declarations are in
+[`Examples/guide/producers.json`](../Examples/guide/producers.json).
+To extend the manual CLI setup from section 5, prepare a **fresh** project
+folder with the new Linen checkout and merge the declarations:
+
+```sh
+uv run Examples/guide/run.py --linen ../linen --prepare "$WORK/producer-project"
+jq -s --arg directory "$WORK/producer-project" '
+  .[0] as $base | .[1] as $extra |
+  $base | .source = {directory:$directory} |
+  .functions += $extra.functions | .graphs += $extra.graphs
+' Examples/guide/build.json Examples/guide/producers.json > "$WORK/producer-build.json"
+
+jq -c '{method:"POST",path:"/v0/builds",body:.}' "$WORK/producer-build.json" \
+  | "$LUN_BIN" cli > "$WORK/producer-build-reply.json"
+PRODUCER_BUILD="$(jq -er '.body | select(.state == "ready") | .id' "$WORK/producer-build-reply.json")"
+```
+
+Initialize, persist and resume the paced graph through the same `rpc` helper:
+
+```sh
+rpc POST "/v0/builds/$PRODUCER_BUILD/graphs/paced" \
+  '{"inputs":{"xs":[1,2,3,4,5,6]},"now":1000}' > "$WORK/paced.json"
+# paced emits 1,2; double emits 2,4; nextCallAt is 3000.
+
+BODY="$(jq -c '.body | {state,now:3000}' "$WORK/paced.json")"
+rpc POST "/v0/builds/$PRODUCER_BUILD/graphs/paced" "$BODY"
+# paced emits 4; double emits 8; nextCallAt is 4000.
+```
+
+#### Resumption, replacement and the pure-script boundary
+
+![A new list input restarts the producer and replaces the older scheduled continuation.](figures/producer-restart.svg)
+
+A **changed upstream argument** restarts the whole block with a fresh cursor.
+For example, changing the paced input to `[10,20]` at `2000` immediately emits
+`10`, `20` and replaces the old `3000` wake-up with `4000`. A call at `3000`
+then performs no producer work. An unchanged input is not an argument event
+and does not restart it. This is latest-input behavior, like replacing a
+previous inner stream with the newest input's stream.
+
+The pure helper saves an instruction cursor, then reconstructs prior pure
+control flow to reach it. Consumed yields do not emit again and consumed waits
+do not delay again. It stores no closure, subscription, or suspended thread.
+Reconstruction costs time proportional to the consumed prefix of a finite
+script; `every` resets the cursor each cycle. For very large long-lived
+traversals, the explicit typed-step API can retain the remaining data directly.
+
+Scripts contain pure computation plus producer commands; external effects
+are performed by separately declared downstream functions, which receive
+fresh authority on every graph call. The explicit step API remains available
+for effectful producers with application-defined typed state. Pure cursors
+do not grant permission or make retries exactly-once.
+
+When immediate emissions exceed the per-call budget, their pending values
+travel in the graph state and request an immediate follow-up. Persist the
+**whole returned graph state**, not merely `Producer.Cursor`, and keep calling
+when `nextCallAt` is due until it becomes `null` or moves into the future.
 
 ### Caller-owned database and scheduler
 

@@ -1,0 +1,34 @@
+{
+  "functions": [
+    {"name":"every5s","module":"Producers","function":"Tutorial.every5s","signature":"Nat → Option Producer.CycleCursor → Eff [] (List Nat × Producer.CycleCursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"after5s","module":"Producers","function":"Tutorial.after5s","signature":"Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"eachNow","module":"Producers","function":"Tutorial.eachNow","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"wholeList","module":"Producers","function":"Tutorial.wholeList","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List (List Nat) × Producer.Cursor × Option Nat)","producer":true,"outputType":"List Nat"},
+    {"name":"paced","module":"Producers","function":"Tutorial.paced","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"selected","module":"Producers","function":"Tutorial.selected","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"headThenTail","module":"Producers","function":"Tutorial.headThenTail","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"batches","module":"Producers","function":"Tutorial.batches","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"runningTotal","module":"Producers","function":"Tutorial.runningTotal","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"bounded","module":"Producers","function":"Tutorial.bounded","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"pairs","module":"Producers","function":"Tutorial.pairs","signature":"List Nat → List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"composed","module":"Producers","function":"Tutorial.composed","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"sampleCycle","module":"Producers","function":"Tutorial.sampleCycle","signature":"Nat → Option Producer.CycleCursor → Eff [] (List Nat × Producer.CycleCursor × Option Nat)","producer":true,"outputType":"Nat"},
+    {"name":"mixed","module":"Producers","function":"Tutorial.mixed","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Tutorial.Emission × Producer.Cursor × Option Nat)","producer":true,"outputType":"Tutorial.Emission"}
+  ],
+  "graphs": [
+    {"name":"every5s","program":"do\n let tick ← every5s\n render tick"},
+    {"name":"after5s","program":"do\n let value ← after5s\n render value"},
+    {"name":"eachNow","program":"do\n let xs ← input \"xs\" (List Nat)\n let item ← eachNow xs\n double item","inputTypes":{"xs":"List Nat"}},
+    {"name":"wholeList","program":"do\n let xs ← input \"xs\" (List Nat)\n let batch ← wholeList xs\n sum batch","inputTypes":{"xs":"List Nat"}},
+    {"name":"paced","program":"do\n let xs ← input \"xs\" (List Nat)\n let item ← paced xs\n double item","inputTypes":{"xs":"List Nat"}},
+    {"name":"selected","program":"do\n let xs ← input \"xs\" (List Nat)\n selected xs","inputTypes":{"xs":"List Nat"}},
+    {"name":"headThenTail","program":"do\n let xs ← input \"xs\" (List Nat)\n headThenTail xs","inputTypes":{"xs":"List Nat"}},
+    {"name":"batches","program":"do\n let xs ← input \"xs\" (List Nat)\n batches xs","inputTypes":{"xs":"List Nat"}},
+    {"name":"runningTotal","program":"do\n let xs ← input \"xs\" (List Nat)\n runningTotal xs","inputTypes":{"xs":"List Nat"}},
+    {"name":"bounded","program":"do\n let xs ← input \"xs\" (List Nat)\n bounded xs","inputTypes":{"xs":"List Nat"}},
+    {"name":"pairs","program":"do\n let xs ← input \"xs\" (List Nat)\n let ys ← input \"ys\" (List Nat)\n pairs xs ys","inputTypes":{"xs":"List Nat","ys":"List Nat"}},
+    {"name":"composed","program":"do\n let xs ← input \"xs\" (List Nat)\n composed xs","inputTypes":{"xs":"List Nat"}},
+    {"name":"sampleCycle","program":"do\n sampleCycle"},
+    {"name":"mixed","program":"do\n let xs ← input \"xs\" (List Nat)\n mixed xs","inputTypes":{"xs":"List Nat"}}
+  ]
+}

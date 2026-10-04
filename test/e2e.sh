@@ -5,7 +5,7 @@
 #   test/e2e.sh [LINEN_DIR]
 #
 # LINEN_DIR is a linen checkout carrying `Control.Reactive` and
-# `Control.Monad.Effect.Handler` (linen >= 1.3.0), default ../linen. The test
+# `Control.Monad.Effect.Producer` (linen >= 1.12.0), default ../linen. The test
 # runs lun in local mode (LUN_ALLOW_LOCAL=1), which is what admits the
 # file:// repository and the fixture's path dependency on that checkout.
 set -euo pipefail
@@ -105,7 +105,11 @@ functions='[
   {"name":"burst","module":"Fixture.Math","function":"Fixture.burst","signature":"Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"},
   {"name":"ticker","module":"Fixture.Math","function":"Fixture.ticker","signature":"Nat → Option Nat → Eff [] (List Nat × Nat × Option Nat)","producer":true,"outputType":"Nat"},
   {"name":"later","module":"Fixture.Math","function":"Fixture.later","signature":"Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"},
-  {"name":"invalidWake","module":"Fixture.Math","function":"Fixture.invalidWake","signature":"Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"}
+  {"name":"invalidWake","module":"Fixture.Math","function":"Fixture.invalidWake","signature":"Nat → Nat → Option Unit → Eff [] (List Nat × Unit × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"paced","module":"Fixture.Producers","function":"Fixture.paced","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"every5s","module":"Fixture.Producers","function":"Fixture.every5s","signature":"Nat → Option Producer.CycleCursor → Eff [] (List Nat × Producer.CycleCursor × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"eachNow","module":"Fixture.Producers","function":"Fixture.eachNow","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List Nat × Producer.Cursor × Option Nat)","producer":true,"outputType":"Nat"},
+  {"name":"wholeList","module":"Fixture.Producers","function":"Fixture.wholeList","signature":"List Nat → Nat → Option Producer.Cursor → Eff [] (List (List Nat) × Producer.Cursor × Option Nat)","producer":true,"outputType":"List Nat"}
 ]'
 graphs='[
   {"name": "main", "program": "do\n  let x ← input \"x\" Nat\n  let s ← seed\n  let d ← math.double x\n  let d2 ← math.double d\n  let a ← add d2 s\n  let n ← succ a\n  render n"},
@@ -117,7 +121,11 @@ graphs='[
   {"name":"silent","program":"do\n let x ← input \"x\" Nat\n let v ← later x\n render v","inputTypes":{"x":"Nat"}},
   {"name":"badSchedule","program":"do\n let x ← input \"x\" Nat\n let v ← invalidWake x\n render v"},
   {"name":"producerDiamond","program":"do\n let x ← input \"x\" Nat\n let root ← delayed x\n let left ← succ root\n let right ← math.double root\n let joined ← add left right\n render joined","inputTypes":{"x":"Nat"}},
-  {"name":"twoProducers","program":"do\n let x ← input \"x\" Nat\n let a ← delayed x\n let b ← ticker\n add a b","inputTypes":{"x":"Nat"}}
+  {"name":"twoProducers","program":"do\n let x ← input \"x\" Nat\n let a ← delayed x\n let b ← ticker\n add a b","inputTypes":{"x":"Nat"}},
+  {"name":"paced","program":"do\n let xs ← input \"xs\" (List Nat)\n let v ← paced xs\n render v","inputTypes":{"xs":"List Nat"}},
+  {"name":"every5s","program":"do\n let v ← every5s\n render v"},
+  {"name":"eachNow","program":"do\n let s ← seed\n let xs ← input \"xs\" (List Nat)\n let v ← eachNow xs\n add v s","inputTypes":{"xs":"List Nat"}},
+  {"name":"wholeList","program":"do\n let xs ← input \"xs\" (List Nat)\n wholeList xs","inputTypes":{"xs":"List Nat"}}
 ]'
 
 # ── Refusals before any build ───────────────────────────────────────────────
@@ -132,7 +140,7 @@ r="$(api POST /v0/builds "$(request "$commit" main "$functions" "$graphs")")"
 expect "submitting a build" 202 '.state == "queued"' "$r"
 id="$(jq -r .id <<<"${r#* }")"
 r="$(wait_build "$id")"
-expect "the build is ready" 200 '.state == "ready" and (.functions | length) == 11 and (.graphs[0].sinks == [6])' "$r"
+expect "the build is ready" 200 '.state == "ready" and (.functions | length) == 15 and (.graphs[0].sinks == [6])' "$r"
 expect "resubmitting returns the ready build" 200 ".id == \"$id\" and .state == \"ready\"" \
   "$(api POST /v0/builds "$(request "$commit" main "$functions" "$graphs")")"
 (cd "$work/lun/builds/$id/driver" && lake env lean "$here/RuntimeChecks.lean")
