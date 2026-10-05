@@ -33,7 +33,9 @@ jobs:
   # package cache holds, unless `LINEN_E2E_REF` says otherwise.
   e2e:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Cold native builds plus both transports of the interactive and cookbook
+    # suites exceed 45 minutes; leave room for the producer cookbook as well.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
