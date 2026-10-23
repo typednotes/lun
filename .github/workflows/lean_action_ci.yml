@@ -27,19 +27,39 @@ jobs:
       - run: lake test
       - run: lake build lun-example
 
-  # The end-to-end test builds a real project against a linen carrying
-  # `Control.Reactive` and the sequential producer helper (linen >= 1.12.0),
-  # checked out next to lun, as `test/e2e.sh` expects: the version the image's
-  # package cache holds, unless `LINEN_E2E_REF` says otherwise.
-  e2e:
+  # Each suite gets its own cold-build budget. Running all of them serially
+  # exceeded 90 minutes and also risked the publisher's two-hour CI wait.
+  # Keep every transport and producer check required through the e2e job below.
+  integration:
+    name: integration (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    # Cold native builds plus both transports of the interactive and cookbook
-    # suites exceed 45 minutes; leave room for the producer cookbook as well.
-    timeout-minutes: 90
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core
+            command: lun/test/e2e.sh linen
+          - name: local
+            command: uv run lun/test/local.py --linen linen
+          - name: interactive-cli
+            command: uv run lun/Examples/interactive/run.py --linen linen --demo
+          - name: interactive-http
+            command: uv run lun/Examples/interactive/run.py --linen linen --transport http --demo
+          - name: guide-cli
+            command: uv run lun/Examples/guide/run.py --linen linen --quiet
+          - name: guide-http
+            command: uv run lun/Examples/guide/run.py --linen linen --transport http --quiet
+          - name: producers-cli
+            command: uv run lun/Examples/guide/run.py --producers --linen linen --quiet
+          - name: producers-http
+            command: uv run lun/Examples/guide/run.py --producers --linen linen --transport http --quiet
     steps:
       - uses: actions/checkout@v7
         with:
           path: lun
+      # The real projects use the image's coordinated Linen revision, unless
+      # LINEN_E2E_REF selects an integration override.
       - uses: actions/checkout@v7
         with:
           repository: typednotes/linen
@@ -50,14 +70,25 @@ jobs:
           keyring: false
       - run: sudo apt-get install -y jq
       - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          cache-dependency-glob: lun/**/*.py
       - run: curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
       - run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - run: lun/test/e2e.sh linen
-      - run: uv run lun/test/local.py --linen linen
-      - run: uv run lun/Examples/interactive/run.py --linen linen --demo
-      - run: uv run lun/Examples/interactive/run.py --linen linen --transport http --demo
-      - run: uv run lun/Examples/guide/run.py --linen linen --quiet
-      - run: uv run lun/Examples/guide/run.py --linen linen --transport http --quiet
-      - run: uv run lun/Examples/guide/run.py --producers --linen linen --quiet
-      - run: uv run lun/Examples/guide/run.py --producers --linen linen --transport http --quiet
-      - run: uv run lun/test/temporary_test.py "$RUNNER_TEMP"
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.command }}
+      - name: Temporary filesystem regressions
+        if: matrix.name == 'core'
+        run: uv run lun/test/temporary_test.py "$RUNNER_TEMP"
+
+  # Preserve the existing required check name. A failed, cancelled or skipped
+  # matrix must fail this check rather than silently skipping it.
+  e2e:
+    if: ${{ always() }}
+    needs: integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every integration suite
+        env:
+          RESULT: ${{ needs.integration.result }}
+        run: test "$RESULT" = success
