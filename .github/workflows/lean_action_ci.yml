@@ -24,8 +24,9 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           test: false
+          build-args: "--wfail"
       - run: lake test
-      - run: lake build lun-example
+      - run: lake build --wfail lun-example
 
   # Each suite gets its own cold-build budget. Running all of them serially
   # exceeded 90 minutes and also risked the publisher's two-hour CI wait.

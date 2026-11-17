@@ -6,7 +6,7 @@ open Lean Lun.WorkerCache
 #guard (Capacity.check 16).isOk
 example (capacity : Capacity) : capacity.count ≤ 16 := capacity.bounded
 example (request : Request) : request.key = keyOf request.build request.kind request.name request.body := request_binding request
-example (response : Response n) : (response.value.getObjValAs? Nat "id").toOption = some n := response.correlated
+example (n : Nat) (response : Response n) : (response.value.getObjValAs? Nat "id").toOption = some n := response.correlated
 
 def body (org user graph : String) : Json := Json.mkObj [("binding", Json.mkObj
   [("org_id", Json.str org), ("user_id", Json.str user), ("graph_id", Json.str graph)])]
