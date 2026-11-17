@@ -17,7 +17,6 @@ require liaison from git "https://github.com/typednotes/liaison" @ "v0.6.0"
 package lun where
   version := v!"0.4.4"
   testDriver := "LunTest"
-  leanOptions := #[⟨`autoImplicit, false⟩, ⟨`relaxedAutoImplicit, false⟩]
 
 -- The driver runtime, embedded in `Lun.Driver` with `include_str`. Lake does
 -- not see through `include_str`, so without this `needs` an edited runtime

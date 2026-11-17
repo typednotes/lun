@@ -1,6 +1,6 @@
 # AGENTS.md — lun
 
-<!-- agents-md standard v3 — github.com/ngrislain/agents. Refresh with the agents-md skill. -->
+<!-- agents-md standard v4 — github.com/ngrislain/agents. Refresh with the agents-md skill. -->
 
 Instructions for coding agents (Claude Code, Codex, pi, opencode, …) and for humans working on
 this project. `CLAUDE.md` imports this file; edit this one.
@@ -22,14 +22,15 @@ Coordinated release set: **Lun 0.3.0 / Lode 0.3.0 / Typednotes 0.6.0 /
 Linen 1.10.0 / Liaison 0.6.0**. The current driver requires the Linen connector
 APIs and Liaison's pure `Liaison.Wire` SDK; the historical 1.3.0 Reactive minimum
 is not sufficient for this runtime. Package locks and image/default pins use the
-current runner's dependency versions. Publishing the local release tags and deploying remain the user's actions.
+current runner's dependency versions. Publishing the local release tags requires an explicit
+push request; deployments still require separate explicit confirmation.
 
 | Task | Command |
 | --- | --- |
 | Install | Lean toolchain from `lean-toolchain` via [elan](https://github.com/leanprover/elan); `git`, `jq`, `uv` and linen's native build dependencies (see `Dockerfile`); `lake build` fetches the dependencies pinned in `lake-manifest.json` |
 | Type-check | `lake build --wfail` |
 | Test | `lake test`; `lake build lun-example`; `bash ci/test-require-main-ci.sh`; `test/e2e.sh ../linen`; `uv run test/local.py`; `uv run test/temporary_test.py <scratch>`; `PATH=<postgresql>/bin:$PATH uv run test/runtime.py --temp-root <scratch>` (see Running tests and the `integration` matrix in `.github/workflows/lean_action_ci.yml`) |
-| Build / release | `lake build lun`; `docker build -t lun .`; release: a `v*.*.*` tag pushed by the user triggers `.github/workflows/docker-publish.yml` |
+| Build / release | `lake build lun`; `docker build -t lun .`; release: a `v*.*.*` tag push triggers `.github/workflows/docker-publish.yml` (push only when explicitly requested) |
 | CLI (applications) | `lake exe lun --help` |
 
 Before declaring a change done, run type-check, tests and lint, and report their real output.
@@ -55,7 +56,11 @@ Before declaring a change done, run type-check, tests and lint, and report their
 
 **Confirm explicitly every time**, even if a similar action was approved earlier — approval does
 not carry over to a new context:
-- `git push` of any kind; never force-push, and never push to `main`/`master` directly;
+- `git push` only when explicitly requested by the user for that operation. Direct pushes to
+  `main`/`master` are permitted only when explicitly specified. A request specifying the push
+  scope (repositories, remote, branches and any tags), including an explicit command or batch,
+  counts as confirmation; do not ask again for the same operation. Approval does not extend to
+  later pushes. Never force-push or rewrite pushed history;
 - opening, merging or closing a PR/MR, posting review comments, tagging, releasing, publishing a
   package or image;
 - deploying to any environment (dev, staging, prod);
@@ -165,7 +170,7 @@ experiments are logged too.
 ### Types: use the strongest standard checking the language offers, maximally
 
 - Use the standard type-checker of the language/framework in its strictest practical mode, run it in
-  CI, and keep it at zero errors. In this project: Lean 4 (toolchain `leanprover/lean4:v4.34.0`, pinned in `lean-toolchain`), type-checked by `lake build`, with every theorem checked by Lean's kernel. `lakefile.lean` turns `autoImplicit` and `relaxedAutoImplicit` off for the package (`leanOptions`), and CI builds with `--wfail` (`leanprover/lean-action@v1` `build-args` and the `lake build --wfail lun-example` step): warnings, including `declaration uses 'sorry'`, fail the build. Run `lake build --wfail` locally. "No `partial def`" remains a project convention (see Project-specific notes), not a compiler-enforced setting.
+  CI, and keep it at zero errors. In this project: Lean 4 (toolchain `leanprover/lean4:v4.34.0`, pinned in `lean-toolchain`), type-checked by `lake build`, with every theorem checked by Lean's kernel. `autoImplicit` stays on (Lean's default: it only automates implicit binders, which are still fully checked), and CI builds with `--wfail` (`leanprover/lean-action@v1` `build-args` and the `lake build --wfail lun-example` step): warnings, including `declaration uses 'sorry'`, fail the build. Run `lake build --wfail` locally. "No `partial def`" remains a project convention (see Project-specific notes), not a compiler-enforced setting.
 - Make illegal states unrepresentable: precise types, enums/sum types over strings and flags, new
   types for identifiers and units, immutable data by default. Avoid `Any`, casts and ignores; when
   one is unavoidable, scope it narrowly and justify it in a comment.
@@ -283,8 +288,8 @@ Look out for tasks the user does by hand again and again, and propose to automat
 
 These project rules take precedence over the Permissions section above.
 
-- **Never run `git push` in this repo.** Commits are fine when asked for;
-  pushing is always left to the user. This is stricter than the standard's "confirm explicitly every time" rule for `git push`: an agent does not run `git push` at all, and the user pushes themselves.
+- **Push only when explicitly requested by the user**, following the push-specific
+  confirmation rules in Permissions above. Commits are fine when asked for.
 
 ### Layout
 
