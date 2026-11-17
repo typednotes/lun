@@ -35,6 +35,9 @@ its database and schedules further calls. Compiled code stays loaded in warm wor
 build/run mental model, SVG figures, and a verified cookbook of CLI, HTTP,
 function, stateless graph, delayed-producer, error-recovery and scoped-effect examples.
 
+**Lun 0.4.4** has no user-visible change: it makes the build stricter (no
+auto-bound implicits; warnings fail CI). See [its release notes](docs/release-0.4.4.md).
+
 **Lun 0.4.3** splits the integration suites into parallel CI jobs so the full
 producer cookbook can finish within its build budget. The
 [small interactive example](Examples/interactive/README.md) demonstrates `yield`,
