@@ -7,7 +7,7 @@ open System Lake DSL
 -- statically into every executable already.
 
 -- System.Worker is supplied by the immutable, coordinated Linen release.
-require linen from git "https://github.com/typednotes/linen" @ "v1.12.0"
+require linen from git "https://github.com/typednotes/linen" @ "fde31559683b7f6c04f877b4031ee782307b337a"
 
 -- For `Liaison.Wire` only: liaison's wire format (`POST /v0/egress`), the
 -- module liaison's own server parses with. It is pure and imports none of
