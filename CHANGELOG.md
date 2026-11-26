@@ -7,11 +7,17 @@ Releases before 0.4.4 are described in their git tags and in `docs/release-*.md`
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-11-27
+
 ### Changed
 
-- `autoImplicit` is back to Lean's default (on): it automates implicit binders,
-  which are still fully checked, so it is not a weakening (agents-md standard v4).
-  Warnings still fail the build (`lake build --wfail`).
+- Upgrade the runner, image cache, and runnable examples to Linen 4.0.0 at its [release commit](https://github.com/typednotes/linen/commit/037925bc5068c54efd86690b78b258b9c6787959).
+- Restored Lean’s default implicit binders. CI continues to reject compiler warnings.
+
+### Fixed
+
+- Retain Lean’s assertion symbol in generated macOS drivers so compiled
+  project modules can load.
 
 ## [0.4.4] — 2026-11-17
 
