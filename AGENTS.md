@@ -14,7 +14,7 @@ signature) and one per **graph** of functions (a program in linen's
 inputs, receives changed values, updated state and `nextCallAt`, persists state
 in its database, and schedules further calls. Lun retains compiled code in warm
 workers, never execution records. See `README.md` and `docs/user-guide.md`.
-Current runner release: **Lun 0.4.3**, with Linen 1.12.0 and Liaison's pure
+Current runner release: **Lun 0.4.6**, with Linen 4.0.0 and Liaison's pure
 0.6.0 SDK. The release set below records the earlier whole-pipeline verification.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
@@ -198,7 +198,7 @@ experiments are logged too.
 ### Types: use the strongest standard checking the language offers, maximally
 
 - Use the standard type-checker of the language/framework in its strictest practical mode, run it in
-  CI, and keep it at zero errors. In this project: Lean 4 (toolchain `leanprover/lean4:v4.34.0`, pinned in `lean-toolchain`), type-checked by `lake build`, with every theorem checked by Lean's kernel. `autoImplicit` stays on (Lean's default: it only automates implicit binders, which are still fully checked), and CI builds with `--wfail` (`leanprover/lean-action@v1` `build-args` and the `lake build --wfail lun-example` step): warnings, including `declaration uses 'sorry'`, fail the build. Run `lake build --wfail` locally. "No `partial def`" remains a project convention (see Project-specific notes), not a compiler-enforced setting.
+  CI, and keep it at zero errors. In this project: Lean 4 (toolchain `leanprover/lean4:v4.36.0`, pinned in `lean-toolchain`), type-checked by `lake build`, with every theorem checked by Lean's kernel. `autoImplicit` stays on (Lean's default: it only automates implicit binders, which are still fully checked), and CI builds with `--wfail` (`leanprover/lean-action@v1` `build-args` and the `lake build --wfail lun-example` step): warnings, including `declaration uses 'sorry'`, fail the build. Run `lake build --wfail` locally. "No `partial def`" remains a project convention (see Project-specific notes), not a compiler-enforced setting.
 - Make illegal states unrepresentable: precise types, enums/sum types over strings and flags, new
   types for identifiers and units, immutable data by default. Avoid `Any`, casts and ignores; when
   one is unavoidable, scope it narrowly and justify it in a comment.

@@ -285,7 +285,10 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
   let flags := (pq.stdout.trimAscii.toString.splitOn " ").filter (!·.isEmpty)
   -- A Linux -L<multiarch> shadows Lean's bundled glibc startup libraries.
   -- Name libpq outright, as Linen's executable-safe native recipe does.
-  let nativeLinkArgs ← if System.Platform.isOSX then pure flags else do
+  let nativeLinkArgs ← if System.Platform.isOSX then
+    -- Driver modules loaded by dlopen can call this Lean runtime symbol.
+    pure (flags ++ ["-Wl,-u,_lean_notify_assert"])
+  else do
     let directory ← System.Process.run "pkg-config" #["--variable=libdir", "libpq"] 30000 (env := credentialFreeEnv)
     unless directory.ok && !directory.stdout.trimAscii.isEmpty do throw (IO.userError "cannot locate libpq for the driver link")
     let library : FilePath := (FilePath.mk directory.stdout.trimAscii.toString) / "libpq.so"

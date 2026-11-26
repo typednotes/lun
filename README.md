@@ -13,8 +13,8 @@
   <a href="https://github.com/typednotes/lun/actions/workflows/docker-publish.yml"><img src="https://github.com/typednotes/lun/actions/workflows/docker-publish.yml/badge.svg" alt="Docker publish"></a>
   <a href="https://github.com/typednotes/lun/pkgs/container/lun"><img src="https://img.shields.io/badge/ghcr.io-typednotes%2Flun-blue?logo=docker" alt="Docker image"></a>
   <a href="https://github.com/typednotes/lun/tags"><img src="https://img.shields.io/github/v/tag/typednotes/lun?label=version&sort=semver" alt="Version"></a>
-  <a href="https://lean-lang.org/"><img src="https://img.shields.io/badge/Lean-v4.34.0-blue" alt="Lean v4.34.0"></a>
-   <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v1.12.0-c9b896" alt="Built on linen v1.12.0"></a>
+  <a href="https://lean-lang.org/"><img src="https://img.shields.io/badge/Lean-v4.36.0-blue" alt="Lean v4.36.0"></a>
+   <a href="https://github.com/typednotes/linen"><img src="https://img.shields.io/badge/built%20on-linen%20v4.0.0-c9b896" alt="Built on linen v4.0.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 </p>
 
@@ -34,6 +34,8 @@ its database and schedules further calls. Compiled code stays loaded in warm wor
 **New to Lun? Read the [illustrated user guide](docs/user-guide.md)** for the
 build/run mental model, SVG figures, and a verified cookbook of CLI, HTTP,
 function, stateless graph, delayed-producer, error-recovery and scoped-effect examples.
+
+**Lun 0.4.6** uses Linen 4.0.0 in the runner, image cache, and examples.
 
 **Lun 0.4.4** has no user-visible change: it makes the build stricter (no
 auto-bound implicits; warnings fail CI). See [its release notes](docs/release-0.4.4.md).
@@ -545,7 +547,7 @@ docker run --rm -p 8080:8080 -v lun:/var/lib/lun \
 ```
 
 The image carries the Lean toolchain and a package cache of linen
-(`LINEN_REF`, coordinated target `v1.10.0`) pre-built for what functions need, so a build
+(`LINEN_REF` uses the pinned Linen 4.0.0 release commit) pre-built for what functions need, so a build
 compiles only the project and its functions. To build it locally:
 `docker build -t lun .` (or `podman build`).
 
