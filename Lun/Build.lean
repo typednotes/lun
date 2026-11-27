@@ -71,13 +71,16 @@ structure Config where
   allowLocal : Bool := false
   /-- Local contract tests can consume an unpublished broker SDK checkout. -/
   liaisonSdkPath : Option FilePath := none
+  /-- Required for builds containing DAGs. Keys are selected by the operator. -/
+  cellCompiler : Option Cell.Compiler := none
   salt : String
 
 /-- Build and driver processes do not inherit service credentials. Runtime
     receives only its server-owned private stdin context after compilation. -/
 def credentialFreeEnv : Array (String × Option String) :=
   #["SECRETS_USERNAME", "SECRETS_PASSWORD", "SECRETS_TOKEN", "LUN_TOKEN", "LUN_WARRANT_KEY",
-    "COMPUTE_DB_URL", "DATABASE_URL"].map fun name => (name, none)
+    "COMPUTE_DB_URL", "DATABASE_URL", "GNUPGHOME", "GPG_AGENT_INFO",
+    "LUN_CELL_SIGNING_HOME", "LUN_CELL_SIGNING_KEY", "LUN_CELL_KEYRING"].map fun name => (name, none)
 
 /-- Private service configuration travels in each request, never in a warm
     worker's inherited environment or in caller-persisted graph state. -/
@@ -124,7 +127,8 @@ instance : ToJson Status where
     (match s.description with
      | some d => [("functions", (d.getObjVal? "functions").toOption.getD (Json.arr #[])),
                   ("graphs", (d.getObjVal? "graphs").toOption.getD (Json.arr #[])),
-                  ("runtimeContract", (d.getObjVal? "runtimeContract").toOption.getD Json.null)]
+                  ("runtimeContract", (d.getObjVal? "runtimeContract").toOption.getD Json.null),
+                  ("cells", (d.getObjVal? "cells").toOption.getD (Json.arr #[]))]
      | none => [])
 
 /-- Read a status back from its JSON. -/
@@ -135,7 +139,8 @@ def Status.ofJson (j : Json) : Except String Status := do
   let error := (j.getObjValAs? String "error").toOption
   let diagnostics := (j.getObjValAs? (Array Json) "diagnostics").toOption.getD #[]
   let description := match j.getObjVal? "functions", j.getObjVal? "graphs" with
-    | .ok c, .ok d => some (Json.mkObj ([("functions", c), ("graphs", d)] ++
+    | .ok c, .ok d => some (Json.mkObj ([("functions", c), ("graphs", d),
+        ("cells", (j.getObjVal? "cells").toOption.getD (Json.arr #[]))] ++
         (((j.getObjValAs? String "runtimeContract").toOption.map fun version => [("runtimeContract", Json.str version)]).getD [])))
     | _, _ => none
   return { id, state, source, error, diagnostics, description }
@@ -252,6 +257,10 @@ private structure Prepared where
 private def Builder.prepare (b : Builder) (spec : BuildSpec) (status : Status) : IO Prepared := do
   let cfg := b.cfg
   let id := status.id
+  unless spec.graphs.isEmpty do
+    let some compiler := cfg.cellCompiler
+      | throw (IO.userError "DAG builds require LUN_CELL_SIGNING_KEY, LUN_CELL_SIGNING_HOME and LUN_CELL_KEYRING")
+    compiler.check
   writeStatus cfg { status with state := .fetching }
   let src := srcDir cfg id
   if ← src.pathExists then IO.FS.removeDirAll src
@@ -267,8 +276,13 @@ private def Builder.prepare (b : Builder) (spec : BuildSpec) (status : Status) :
     throw (IO.userError "the project has no committed lake-manifest.json")
   let manifest ← IO.ofExcept (Manifest.parse (← IO.FS.readFile manifestFile) |>.mapError IO.userError)
   IO.ofExcept (Manifest.check manifest cfg.allowLocal |>.mapError IO.userError)
+  let toolchain ← IO.FS.readFile toolchainFile
+  unless spec.graphs.isEmpty do
+    let expected := "leanprover/lean4:v" ++ Lean.versionString
+    unless toolchain.trimAscii.toString == expected do
+      throw (IO.userError s!"native DAG cells require compiler toolchain {expected}; update the project's lean-toolchain")
   writeStatus cfg { status with state := .queued }
-  return { project, manifest, toolchain := ← IO.FS.readFile toolchainFile }
+  return { project, manifest, toolchain }
 
 /-- Steps 3–5, generate, build and describe, under the build lock. -/
 private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (p : Prepared) :
@@ -290,7 +304,11 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
     unless directory.ok && !directory.stdout.trimAscii.isEmpty do throw (IO.userError "cannot locate libpq for the driver link")
     let library : FilePath := (FilePath.mk directory.stdout.trimAscii.toString) / "libpq.so"
     unless ← library.pathExists do throw (IO.userError "libpq shared library is unavailable for the driver link")
-    pure ((flags.filter (!·.startsWith "-L")).map fun flag => if flag == "-lpq" then library.toString else flag)
+    -- Lean's static ELF symbol table can exceed the native-cell byte budget.
+    -- Strip non-runtime symbols during linking; the dynamic symbol table and
+    -- loader metadata are retained. The linker flag is part of the build key.
+    pure ("-Wl,--strip-all" :: (flags.filter (!·.startsWith "-L")).map
+      (fun flag => if flag == "-lpq" then library.toString else flag))
   let files := Driver.files
     { spec, projectDir := ← IO.FS.realPath p.project, packageName := p.manifest.name
       toolchain := p.toolchain, liaisonSdkPath := cfg.liaisonSdkPath, nativeLinkArgs
@@ -301,7 +319,7 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
     IO.FS.writeFile file contents
   seedCache b id p.manifest
   -- 4. build. Lake clones the project's dependencies (linen) with git.
-  let r ← System.Process.run "lake" #["build"] cfg.buildTimeoutMs (cwd := driver) (env := System.Process.hermeticGit ++ credentialFreeEnv)
+  let r ← System.Process.run "lake" #["build", "--wfail"] cfg.buildTimeoutMs (cwd := driver) (env := System.Process.hermeticGit ++ credentialFreeEnv)
   appendLog cfg id r.stdout
   appendLog cfg id r.stderr
   unless r.ok do
@@ -318,6 +336,41 @@ private def Builder.compile (b : Builder) (spec : BuildSpec) (status : Status) (
   let d ← System.Process.run (driverExe cfg id).toString #["describe"] cfg.callTimeoutMs (env := driverEnv)
   unless d.ok do throw (IO.userError (d.describe "lun-driver describe"))
   let description ← IO.ofExcept (Json.parse d.stdout |>.mapError IO.userError)
+  let bindings ← if spec.graphs.isEmpty then pure [] else do
+    let some compiler := cfg.cellCompiler | throw (IO.userError "native cell compiler is not configured")
+    let contracts ← (← IO.ofExcept ((description.getObjValAs? (List Json) "functions").mapError IO.userError)).mapM fun function => do
+      let name ← IO.ofExcept ((function.getObjValAs? String "name").mapError IO.userError)
+      let contract ← IO.ofExcept ((function.getObjValAs? Cell.Contract "contract").mapError IO.userError)
+      pure (name, contract)
+    let lock ← IO.ofExcept ((Json.parse (← IO.FS.readFile (driver / "lake-manifest.json"))).mapError IO.userError)
+    let packages ← IO.ofExcept ((lock.getObjValAs? (List Json) "packages").mapError IO.userError)
+    let dependencies ← packages.mapM fun package => do
+      let name ← IO.ofExcept ((package.getObjValAs? String "name").mapError IO.userError)
+      let root ← if (package.getObjValAs? String "type").toOption == some "path" then do
+        let path ← IO.ofExcept ((package.getObjValAs? String "dir").mapError IO.userError)
+        pure (driver / path)
+        else pure (driver / ".lake" / "packages" / name)
+      return (name, (← Cell.hashTree root).hex)
+    let inputs : System.Cell.BuildInputs := {
+      sourceSha256 := ← Cell.hashTree p.project
+      wrapperSha256 := ← Cell.hashTree driver
+      dependenciesSha256 := ← System.Cell.Digest.ofBytes (toJson dependencies).compress.toUTF8
+      linkSha256 := ← Cell.hashLinkInputs (driver / ".lake" / "build" / "bin" / "lun-driver.rsp") nativeLinkArgs }
+    let cellsDir := buildDir cfg id / "cells"
+    if ← cellsDir.pathExists then IO.FS.removeDirAll cellsDir
+    compiler.package cellsDir (driverExe cfg id) contracts inputs spec.canonical
+      (Json.mkObj [("auditVersion", Cell.auditVersion), ("runtimeContract", Driver.runtimeContract),
+        ("functions", (spec.canonical.getObjVal? "functions").toOption.getD Json.null)])
+  let description := description.setObjVal! "cells" (toJson bindings)
+  let graphDescriptions ← IO.ofExcept ((description.getObjValAs? (List Json) "graphs").mapError IO.userError)
+  let graphDescriptions ← graphDescriptions.mapM fun graph => do
+    let nodes ← IO.ofExcept ((graph.getObjValAs? (List Json) "nodes").mapError IO.userError)
+    let nodes := nodes.map fun node =>
+      match (node.getObjValAs? String "function").toOption >>= fun name => bindings.find? (·.name == name) with
+      | some binding => node.setObjVal! "cell" (toJson binding.pin)
+      | none => node
+    return graph.setObjVal! "nodes" (toJson nodes)
+  let description := description.setObjVal! "graphs" (toJson graphDescriptions)
   discard <| b.workers.preload id (driverExe cfg id).toString driverEnv cfg.callTimeoutMs
   let warnings := (Diagnostics.parse r.stdout).filter reportable
   set { status with
@@ -419,7 +472,11 @@ def Builder.call (b : Builder) (id kind name : String) (request : String) : IO A
   let mut protectedFields : List (String × Json) := []
   for name in runtimeEnvironmentNames do
     if let some value ← IO.getEnv name then protectedFields := (name, Json.str value) :: protectedFields
-  let req := (((req.setObjVal! "_runtime" (Json.mkObj protectedFields)).setObjVal! "liaisonUrl"
+  if let some compiler := b.cfg.cellCompiler then
+    protectedFields := ("LUN_CELL_KEYRING", toJson compiler.keyring.toString) :: protectedFields
+  protectedFields := ("LUN_CELL_CALL_TIMEOUT_MS", toJson b.cfg.callTimeoutMs) :: protectedFields
+  let cells := (s.description.bind fun d => (d.getObjVal? "cells").toOption).getD (Json.arr #[])
+  let req := ((((req.setObjVal! "_runtime" (Json.mkObj protectedFields)).setObjVal! "_cells" cells).setObjVal! "liaisonUrl"
     (b.cfg.liaisonUrl.map Json.str |>.getD Json.null)).setObjVal! "_build" (Json.str id)).setObjVal! "_graph" (Json.str name)
   let framed ← match WorkerCache.Request.check id kind name req with
     | .ok r => pure r

@@ -6,8 +6,8 @@ open System Lake DSL
 -- `liaison` it needs no extra link arguments: Lean's toolchain links OpenSSL
 -- statically into every executable already.
 
--- System.Worker is supplied by the immutable, coordinated Linen release.
-require linen from git "https://github.com/typednotes/linen" @ "fde31559683b7f6c04f877b4031ee782307b337a"
+-- Native cell admission and execution use Linen's shared signed package format.
+require linen from git "https://github.com/typednotes/linen" @ "bcfec9a81d6e738ecb273f89e2102b4712d8e160"
 
 -- For `Liaison.Wire` only: liaison's wire format (`POST /v0/egress`), the
 -- module liaison's own server parses with. It is pure and imports none of
@@ -29,9 +29,13 @@ input_file driverTemporary where
   path := "template/LunDriver/temporary.py"
   text := true
 
+input_file driverCell where
+  path := "Lun/Cell.lean"
+  text := true
+
 @[default_target]
 lean_lib Lun where
-  needs := #[driverRuntime, driverTemporary]
+  needs := #[driverRuntime, driverTemporary, driverCell]
 
 -- Named `LunTest` (module tree `LunTest.*`), the `{Package}Test` convention
 -- of mathlib, batteries and aesop, and the package's `testDriver` (`lake test`).

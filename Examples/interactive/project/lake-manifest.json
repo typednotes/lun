@@ -1,1 +1,21 @@
-{"version":"1.2.0","packagesDir":".lake/packages","packages":[{"url":"https://github.com/typednotes/linen","type":"git","subDir":null,"scope":"","rev":"6152308bef3b31598018f966ede38d21fd20a96b","name":"linen","manifestFile":"lake-manifest.json","inputRev":"v1.12.0","inherited":false,"configFile":"lakefile.lean"}],"name":"lun_demo","lakeDir":".lake","fixedToolchain":false}
+{
+ "version": "1.2.0",
+ "packagesDir": ".lake/packages",
+ "packages": [
+  {
+   "url": "https://github.com/typednotes/linen",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "bcfec9a81d6e738ecb273f89e2102b4712d8e160",
+   "name": "linen",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "bcfec9a81d6e738ecb273f89e2102b4712d8e160",
+   "inherited": false,
+   "configFile": "lakefile.lean"
+  }
+ ],
+ "name": "lun_demo",
+ "lakeDir": ".lake",
+ "fixedToolchain": false
+}

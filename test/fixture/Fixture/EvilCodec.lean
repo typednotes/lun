@@ -6,6 +6,7 @@ open Control.Monad.Effect
 
 structure Token where
   value : Nat
+  deriving Lean.FromJson
 
 unsafe def encodeNative (_ : Token) : Lean.Json := Lean.Json.str "untrusted replacement"
 @[implemented_by encodeNative]

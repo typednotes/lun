@@ -50,3 +50,47 @@ example (call : NativeOperation ctx cap op resource) :
     call.live.cell.permits op resource = true := call.live_cell_permits
 example (call : NativeOperation ctx cap op resource) :
     call.live.warrant.permits op resource = true := call.live_warrant_permits
+
+-- Native cells S3: the consumer checks the actual argument/result dictionaries.
+private def nativeDouble (value : Nat) : Eff [] Nat := pure (2 * value)
+private def nativeChecked : FunctionImpl := FunctionImpl.ofFn "double" "Nat → Eff [] Nat" nativeDouble
+#guard (nativeChecked.validateArgs [toJson (2 : Nat)]).isOk
+#guard (nativeChecked.validateArgs [Json.str "wrong"]).toOption.isNone
+#guard (nativeChecked.validateArgs [toJson (2 : Nat), toJson (3 : Nat)]).toOption.isNone
+#guard (nativeChecked.validateValue (Json.str "wrong")).toOption.isNone
+#guard match System.Cell.GitSource.check "https://github.com/o/r"
+    ("".pushn 'a' 40) "." "P" "P.double" with
+  | .error _ => false
+  | .ok source => (nativeChecked.checkReply
+      {name := "double", contract := {source, signature := "Nat → Eff [] Nat", arity := 1, producer := false},
+       arguments := [2], context := Json.mkObj []}
+      {outcome := Json.mkObj [("output", Json.str "wrong")], log := ""}).toOption.isNone
+
+namespace NativeAlias
+def sample (value : Nat) : Eff [] Nat := pure value
+def generic {α : Type} [ToString α] (value : α) : Eff [] String := pure (toString value)
+end NativeAlias
+open NativeAlias in
+lun_function "resolvedNative" := sample : r"Nat → Eff [] Nat"
+#guard LunDriver.Impl.resolvedNative.declaration == "NativeAlias.sample"
+lun_function "genericNative" := NativeAlias.generic : r"Nat → Eff [] String"
+#guard LunDriver.Impl.genericNative.declaration == "NativeAlias.generic"
+
+-- S4: the graph bound counts distinct cells, and unsigned closures cannot run.
+private def graphWithCells (count : Nat) : Except String GraphImpl :=
+  let functions := (List.range count).map fun i =>
+    FunctionImpl.ofFn s!"cell{i}" "Eff [] Nat" (pure 1 : Eff [] Nat)
+  GraphImpl.ofReactive functions do
+    for c in functions do
+      discard (applyFunction c Nat [])
+
+#guard (graphWithCells 16).isOk
+#guard (graphWithCells 17).toOption.isNone
+
+#eval show IO Unit from do
+  let graph ← IO.ofExcept ((graphWithCells 1).mapError IO.userError)
+  match ← runGraph graph (Json.mkObj []) with
+  | .error message =>
+    unless (message.splitOn "no compiler-attested cells").length > 1 do
+      throw (IO.userError message)
+  | .ok _ => throw (IO.userError "an unsigned in-process graph closure executed")

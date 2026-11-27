@@ -1,16 +1,21 @@
-{"version": "1.2.0",
+{
+ "version": "1.2.0",
  "packagesDir": ".lake/packages",
- "packages":
- [{"url": "https://github.com/typednotes/linen",
+ "packages": [
+  {
+   "url": "https://github.com/typednotes/linen",
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "82cdbe504911cef3d948a3219c793b642cf564f0",
+   "rev": "bcfec9a81d6e738ecb273f89e2102b4712d8e160",
    "name": "linen",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "v1.10.0",
+   "inputRev": "bcfec9a81d6e738ecb273f89e2102b4712d8e160",
    "inherited": false,
-   "configFile": "lakefile.lean"}],
+   "configFile": "lakefile.lean"
+  }
+ ],
  "name": "pricing",
  "lakeDir": ".lake",
- "fixedToolchain": false}
+ "fixedToolchain": false
+}

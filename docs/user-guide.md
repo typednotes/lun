@@ -9,7 +9,13 @@ the state, database, and scheduler; Lun owns compilation and execution.
 This guide explains that workflow from the user's side. It includes a
 [complete runnable cookbook](../Examples/guide/README.md), rather than requiring
 you to assemble all the snippets yourself. The examples target this checkout's
-CLI/HTTP API and coordinated Linen 1.12.0 runtime.
+CLI/HTTP API and Linen 5.0.0 native cell runtime.
+
+Graph builds require an operator-provisioned compiler signing key and public
+trust root. Every computation then executes a pinned, verified native cell.
+For disposable local examples, prefix the example command with
+`python3 test/cell_compiler.py --`; see [native cells](native-cells.md) for
+persistent signing configuration and migration from older graph state.
 
 The [sequential producer recipes](#sequential-producers-yield-inside-branches-and-loops)
 use `Linen.Control.Monad.Effect.Producer`, introduced in Linen 1.12.0.
@@ -191,7 +197,7 @@ defaultTargets = ["Tutorial"]
 [[require]]
 name = "linen"
 git = "https://github.com/typednotes/linen"
-rev = "v1.12.0"
+rev = "bcfec9a81d6e738ecb273f89e2102b4712d8e160"
 
 [[lean_lib]]
 name = "Tutorial"
@@ -675,6 +681,12 @@ Graphs may create inputs and apply declared functions. General reactive
 operators such as `map`, `filter`, `scan`, and timed operators are refused in a
 Lun graph. Functions execute sequentially; independent branches describe
 dependencies, not a promise of parallel execution.
+
+Each function or producer application executes its compiler-signed native cell.
+Lun verifies all used packages before graph effects, binds their exact manifest
+pins into state, and checks native replies using the compiled Lean decoders.
+A graph may use up to 16 distinct cells; repeated applications of a cell share
+its worker during that graph call. See [native cells](native-cells.md).
 
 ### How Linen Observable and Reactive are used
 

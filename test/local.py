@@ -159,4 +159,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "LUN_CELL_SIGNING_KEY" not in os.environ:
+        from cell_compiler import compiler_environment
+        with compiler_environment() as settings:
+            os.environ.update(settings)
+            main()
+    else:
+        main()

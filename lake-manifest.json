@@ -1,7 +1,9 @@
-{"version": "1.3.0",
+{
+ "version": "1.3.0",
  "packagesDir": ".lake/packages",
- "packages":
- [{"url": "https://github.com/typednotes/liaison",
+ "packages": [
+  {
+   "url": "https://github.com/typednotes/liaison",
    "type": "git",
    "subDir": null,
    "scope": "",
@@ -10,17 +12,22 @@
    "manifestFile": "lake-manifest.json",
    "inputRev": "v0.6.0",
    "inherited": false,
-   "configFile": "lakefile.lean"},
-  {"url": "https://github.com/typednotes/linen",
+   "configFile": "lakefile.lean"
+  },
+  {
+   "url": "https://github.com/typednotes/linen",
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "fde31559683b7f6c04f877b4031ee782307b337a",
+   "rev": "bcfec9a81d6e738ecb273f89e2102b4712d8e160",
    "name": "linen",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "fde31559683b7f6c04f877b4031ee782307b337a",
+   "inputRev": "bcfec9a81d6e738ecb273f89e2102b4712d8e160",
    "inherited": false,
-   "configFile": "lakefile.lean"}],
+   "configFile": "lakefile.lean"
+  }
+ ],
  "name": "lun",
  "lakeDir": ".lake",
- "fixedToolchain": false}
+ "fixedToolchain": false
+}

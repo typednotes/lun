@@ -23,6 +23,7 @@
 -/
 import Lun.Spec
 import Lun.Manifest
+import Lun.Cell
 
 namespace Lun.Driver
 
@@ -31,8 +32,11 @@ def runtimeSource : String := include_str "../template/LunDriver/Runtime.lean"
 
 def temporarySource : String := include_str "../template/LunDriver/temporary.py"
 
+/-- Shared cell protocol/compiler code, compiled into Lun and its drivers. -/
+def cellSource : String := include_str "Cell.lean"
+
 /-- Cached drivers from before bounded execution must never receive calls. -/
-def runtimeContract : String := "stateless-producers-v4"
+def runtimeContract : String := "stateless-cells-v5"
 
 /-- What a driver is generated from. -/
 structure Input where
@@ -120,7 +124,12 @@ def graphSource (opens : List String) (d : GraphSpec) : String :=
 /-- The list of all functions, which the graph checks and the executable use. -/
 def functionsSource (spec : BuildSpec) : String :=
   let imports := (List.range spec.functions.length).map fun i => s!"import {functionModule i}\n"
-  let impls := spec.functions.map fun c => s!"LunDriver.Impl.{ident c.name}"
+  let impls := spec.functions.map fun c =>
+    let source := Lean.Json.mkObj [
+      ("repository", spec.source.repo.cloneUrl), ("commit", spec.source.commit),
+      ("project", if spec.source.path.isEmpty then "." else spec.source.path),
+      ("module", c.module), ("declaration", c.function)]
+    s!"(LunDriver.Impl.{ident c.name}.withSource {rawString source.compress})"
   String.join imports ++
   s!"\ndef LunDriver.functionImpls : List LunDriver.FunctionImpl :=\n  [{", ".intercalate impls}]\n"
 
@@ -150,6 +159,7 @@ def lakefileSource (d : Input) : String :=
     | some path => s!"[[require]]\nname = \"liaison\"\npath = {path.toString.quote}\n\n"
     | none => "[[require]]\nname = \"liaison\"\ngit = \"https://github.com/typednotes/liaison\"\nrev = \"v0.6.0\"\n\n") ++
   s!"[[lean_lib]]\nname = \"LunDriver\"\n\n" ++
+  "[[lean_lib]]\nname = \"LunCell\"\nroots = [\"Lun.Cell\"]\n\n" ++
   s!"[[lean_exe]]\nname = \"lun-driver\"\nroot = \"LunDriver.Main\"\n" ++
   s!"moreLinkArgs = [{", ".intercalate (d.nativeLinkArgs.map String.quote)}]\n"
 
@@ -160,6 +170,7 @@ def files (d : Input) : List (String × String) :=
   , ("lean-toolchain", d.toolchain)
    , ("LunDriver/Runtime.lean", runtimeSource)
    , ("LunDriver/temporary.py", temporarySource)
+   , ("Lun/Cell.lean", cellSource)
   , ("LunDriver/Functions.lean", functionsSource spec)
   , ("LunDriver/Main.lean", mainSource spec) ] ++
   spec.functions.zipIdx.map (fun (c, i) => (moduleFile (functionModule i), functionSource spec.opens c)) ++

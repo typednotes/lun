@@ -21,13 +21,16 @@ def secondsEnv (name : String) (default : Nat) : IO Nat := do
       seconds; defaults `3600`, `600`, `60`;
     - `LUN_PACKAGE_CACHE` — pre-built packages (`{cache}/linen/{rev}`);
     - `LUN_WORKERS` — maximum loaded driver workers, default 4, range 1–16;
+    - `LUN_CELL_SIGNING_KEY`, `LUN_CELL_SIGNING_HOME`, `LUN_CELL_KEYRING` —
+      compiler OpenPGP fingerprint, private signing home and trusted public
+      keyring; required for builds containing DAGs;
     - `LUN_ID_SALT` — salt for build ids; random per process if unset (ids
       then change across HTTP restarts; CLI persists its generated salt);
     - `LUN_ALLOW_LOCAL=1` — local mode: working folders, `file://` repositories
       and path dependencies. Enabled automatically by CLI. -/
 def main (args : List String) : IO UInt32 := do
   if args == ["--help"] || args == ["-h"] then
-    IO.println "Usage: lun [serve | cli]\n\nserve (default): HTTP REST service, configured by LUN_* environment variables.\ncli: local JSON-lines requests on stdin, replies on stdout, diagnostics on stderr.\n     Builds wait by default; folders and file:// repositories are accepted.\n     LUN_WORKDIR defaults to .lun; its generated id salt persists across runs."
+    IO.println "Usage: lun [serve | cli]\n\nserve (default): HTTP REST service, configured by LUN_* environment variables.\ncli: local JSON-lines requests on stdin, replies on stdout, diagnostics on stderr.\n     Builds wait by default; folders and file:// repositories are accepted.\n     LUN_WORKDIR defaults to .lun; its generated id salt persists across runs.\n\nDAG builds require LUN_CELL_SIGNING_KEY (full OpenPGP fingerprint),\nLUN_CELL_SIGNING_HOME (existing compiler key directory), and\nLUN_CELL_KEYRING (trusted compiler public keys). No keys are created automatically."
     return 0
   unless args.isEmpty || args == ["serve"] || args == ["cli"] do
     IO.eprintln "Usage: lun [serve | cli] (see --help)"
@@ -58,6 +61,13 @@ def main (args : List String) : IO UInt32 := do
       | some n => pure n
       | none => throw (IO.userError "LUN_WORKERS must be an integer from 1 to 16")
   let workerCapacity ← IO.ofExcept ((Lun.WorkerCache.Capacity.check workerCount).mapError IO.userError)
+  let cellCompiler ← match ← IO.getEnv "LUN_CELL_SIGNING_KEY", ← IO.getEnv "LUN_CELL_SIGNING_HOME", ← IO.getEnv "LUN_CELL_KEYRING" with
+    | none, none, none => pure none
+    | some fingerprint, some home, some keyring => do
+      let compiler : Lun.Cell.Compiler := {fingerprint, home := ⟨home⟩, keyring := ⟨keyring⟩}
+      compiler.check
+      pure (some compiler)
+    | _, _, _ => throw (IO.userError "set LUN_CELL_SIGNING_KEY, LUN_CELL_SIGNING_HOME and LUN_CELL_KEYRING together")
   let cfg : Lun.Config :=
     { workdir := workdir
       liaisonUrl := ← IO.getEnv "LUN_LIAISON_URL"
@@ -69,6 +79,7 @@ def main (args : List String) : IO UInt32 := do
       packageCache := (← IO.getEnv "LUN_PACKAGE_CACHE").map System.FilePath.mk
       allowLocal
       liaisonSdkPath
+      cellCompiler
       salt }
   let builder ← Lun.Builder.new cfg
   builder.recover

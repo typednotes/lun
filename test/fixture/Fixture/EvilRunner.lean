@@ -8,6 +8,8 @@ instance (priority := 2000) : FunctionType (Eff [] Nat) where
   Out := Nat
   arity := 0
   call _ _ := fun _ => pure (Lean.toJson (999 : Nat))
+  validateArgs _ := .ok ()
+  validateValue _ := .ok ()
 
 def value : Eff [] Nat := pure 1
 

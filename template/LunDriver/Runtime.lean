@@ -41,6 +41,7 @@
     timestamp, and schedules wake-ups. Warm workers retain code, never state.
 -/
 import Lean
+import Lun.Cell
 import Linen.Control.Reactive
 import Linen.Control.Monad.Effect.Handler
 import Linen.Control.Monad.Effect.Trace
@@ -61,7 +62,7 @@ import Linen.Text.XML
 
 namespace LunDriver
 
-def runtimeContract : String := "stateless-producers-v4"
+def runtimeContract : String := "stateless-cells-v5"
 
 open Lean Control.Monad.Effect Control.Reactive
 
@@ -110,7 +111,7 @@ abbrev Execution := ReaderT ExecutionContext IO
 
 def ExecutionContext.ofRequest (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : Except String ExecutionContext := do
   match req.getObjVal? "policy" with
-  | .error _ => return {traceLog}
+  | .error _ => return {traceLog, runtime := (req.getObjVal? "_runtime").toOption.getD (Json.mkObj [])}
   | .ok policy =>
     let effects ← policy.getObjValAs? (List String) "effects"
     let domains ← policy.getObjValAs? (List String) "domains"
@@ -125,6 +126,16 @@ def ExecutionContext.ofRequest (req : Json) (traceLog : Option (IO.Ref BoundedTr
               connectors := (req.getObjVal? "connectors").toOption.getD (Json.mkObj []),
               liaisonUrl := (req.getObjValAs? String "liaisonUrl").toOption,
               runtime := (req.getObjVal? "_runtime").toOption.getD (Json.mkObj []), traceLog }
+
+/-- Re-encode only the current invocation's authority for a native cell.
+    The static manifest, saved state and worker environment supply none of it. -/
+def ExecutionContext.toRequest (ctx : ExecutionContext) : Json :=
+  Json.mkObj <| [("_runtime", ctx.runtime)] ++
+    (if ctx.org.isEmpty then [] else
+      [("policy", Json.mkObj [("effects", toJson (ctx.effects.getD [])), ("domains", toJson ctx.domains)]),
+       ("binding", Json.mkObj [("org_id", ctx.org), ("user_id", ctx.user),
+         ("graph_id", ctx.graph), ("schema", ctx.schema)]),
+       ("connectors", ctx.connectors), ("liaisonUrl", toJson ctx.liaisonUrl)])
 
 /-- Every interpreter entry consumes permission from the current request. -/
 structure EffectPermission (ctx : ExecutionContext) (name : String) : Type where
@@ -966,6 +977,10 @@ class FunctionType (σ : Type 1) where
   /-- Call on exactly `arity` JSON arguments; throws on a decoding error, a
       wrong argument count, or the effect's own error. -/
   call : σ → List Json → Execution Json
+  /-- Check the typed argument envelope without executing effects. -/
+  validateArgs : List Json → Except String Unit
+  /-- Check a native result against the independently compiled output decoder. -/
+  validateValue : Json → Except String Unit
 
 /-- A `Unit` argument takes no input. -/
 instance (priority := high) instFunctionTypeUnit {σ : Type 1} [FunctionType σ] : FunctionType (Unit → σ) where
@@ -973,6 +988,8 @@ instance (priority := high) instFunctionTypeUnit {σ : Type 1} [FunctionType σ]
   Out := FunctionType.Out σ
   arity := FunctionType.arity σ
   call f js := FunctionType.call (f ()) js
+  validateArgs := FunctionType.validateArgs (σ := σ)
+  validateValue := FunctionType.validateValue (σ := σ)
 
 /-- A JSON-decodable argument takes one input. -/
 instance instFunctionTypeArrow {α : Type} {σ : Type 1} [FromJson α] [FunctionType σ] : FunctionType (α → σ) where
@@ -985,9 +1002,15 @@ instance instFunctionTypeArrow {α : Type} {σ : Type 1} [FromJson α] [Function
       | .ok a => FunctionType.call (f a) js
       | .error e => throw (IO.userError s!"cannot decode argument {j.compress}: {e}")
     | [] => throw (IO.userError "missing argument")
+  validateArgs
+    | j :: js => do
+      discard (fromJson? j : Except String α)
+      FunctionType.validateArgs (σ := σ) js
+    | [] => throw "missing argument"
+  validateValue := FunctionType.validateValue (σ := σ)
 
 /-- The result: an effectful computation over the canonical bound interpreter. -/
-instance instFunctionTypeEff {effs : List (Type → Type)} {β : Type} [Handlers effs Execution] [ToJson β] :
+instance instFunctionTypeEff {effs : List (Type → Type)} {β : Type} [Handlers effs Execution] [ToJson β] [FromJson β] :
     FunctionType (Eff effs β) where
   Args := []
   Out := β
@@ -995,6 +1018,10 @@ instance instFunctionTypeEff {effs : List (Type → Type)} {β : Type} [Handlers
   call m
     | [] => toJson <$> m.handle
     | _ => throw (IO.userError "too many arguments")
+  validateArgs
+    | [] => pure ()
+    | _ => throw "too many arguments"
+  validateValue value := (fromJson? value : Except String β).map fun _ => ()
 
 /-- One bounded producer step. Wake-ups are absolute Unix milliseconds; the
     continuation is data, never an executable closure. -/
@@ -1002,6 +1029,7 @@ structure ProducerStep where
   values : List Json
   state : Json
   nextCallAt : Option Nat
+  deriving ToJson, FromJson
 
 /-- Producers have ordinary graph arguments followed by the executor's clock
     and optional continuation. Only emitted `B`s become observable values. -/
@@ -1012,6 +1040,7 @@ class ProducerType (σ : Type 1) where
   call : σ → List Json → Nat → Option Json → Execution ProducerStep
   validateState : Json → Except String Unit
   validateValue : Json → Except String Unit
+  validateArgs : List Json → Except String Unit
 
 instance (priority := high) instProducerTypeStep {S β : Type} {effs : List (Type → Type)}
     [FromJson S] [ToJson S] [FromJson β] [ToJson β] [Handlers effs Execution] :
@@ -1030,6 +1059,7 @@ instance (priority := high) instProducerTypeStep {S β : Type} {effs : List (Typ
     return { values := values.map toJson, state := toJson state, nextCallAt }
   validateState value := (fromJson? value : Except String S).map fun _ => ()
   validateValue value := (fromJson? value : Except String β).map fun _ => ()
+  validateArgs args := if args.isEmpty then .ok () else .error "too many producer arguments"
 
 instance instProducerTypeArrow {α : Type} {σ : Type 1} [FromJson α] [ProducerType σ] :
     ProducerType (α → σ) where
@@ -1044,6 +1074,11 @@ instance instProducerTypeArrow {α : Type} {σ : Type 1} [FromJson α] [Producer
     | [] => throw (IO.userError "missing producer argument")
   validateState := ProducerType.validateState (σ := σ)
   validateValue := ProducerType.validateValue (σ := σ)
+  validateArgs
+    | value :: rest => do
+      discard (fromJson? value : Except String α)
+      ProducerType.validateArgs (σ := σ) rest
+    | [] => throw "missing producer argument"
 
 /-- The erased, canonically interpreted producer plus its continuation/value
     decoders, used when restoring caller-owned JSON. -/
@@ -1060,19 +1095,41 @@ structure FunctionImpl where
   arity : Nat
   call : List Json → Execution Json
   producer : Option ProducerImpl := none
+  /-- Actual declaration checked by the elaborator, independent of metadata. -/
+  declaration : String := ""
+  source : Option System.Cell.GitSource := none
+  validateArgs : List Json → Except String Unit
+  validateValue : Json → Except String Unit
 
 /-- Package a Lean function as a served one. -/
 def FunctionImpl.ofFn {σ : Type 1} [FunctionType σ] (name signature : String) (f : σ) : FunctionImpl :=
-  { name, signature, arity := FunctionType.arity σ, call := FunctionType.call f }
+  { name, signature, arity := FunctionType.arity σ, call := FunctionType.call f
+    validateArgs := FunctionType.validateArgs (σ := σ)
+    validateValue := FunctionType.validateValue (σ := σ) }
 
 /-- Package a producer. It is executed through graph steps, which own its state
     and schedule, rather than through the single-result function endpoint. -/
 def FunctionImpl.ofProducer {σ : Type 1} [ProducerType σ] (name signature : String) (f : σ) : FunctionImpl :=
   { name, signature, arity := ProducerType.arity σ
     call := fun _ => throw (IO.userError "a producer must be called through a graph")
+    validateArgs := ProducerType.validateArgs (σ := σ)
+    validateValue := ProducerType.validateValue (σ := σ)
     producer := some { call := ProducerType.call f
                        validateState := ProducerType.validateState (σ := σ)
                        validateValue := ProducerType.validateValue (σ := σ) } }
+
+/-- Attach immutable build coordinates, refusing a metadata/declaration mismatch. -/
+def FunctionImpl.withSource (c : FunctionImpl) (text : String) : FunctionImpl :=
+  let source := (do
+    let source : System.Cell.GitSource ← Json.parse text >>= fromJson?
+    System.Cell.GitSource.check source.repository source.commit.hex source.project
+      source.moduleName.toString c.declaration : Except String System.Cell.GitSource).toOption
+  { c with source }
+
+/-- The cell's contract comes from checked Lean dictionaries and pinned source. -/
+def FunctionImpl.contract (c : FunctionImpl) : Except String Lun.Cell.Contract := do
+  let some source := c.source | throw s!"function '{c.name}' has no checked cell source"
+  return { source, signature := c.signature, arity := c.arity, producer := c.producer.isSome }
 
 /-- Values travel through a graph wrapped: `{"ok": v}` for a value,
     `{"error": e}` for a function that failed, `{"blocked": true}` for a function not
@@ -1187,8 +1244,10 @@ def functionRow (sig : Expr) : MetaM (Expr × Expr) :=
       throwError "a function must return `Eff effs β`, not{indentExpr body}"
     return (body.getArg! 0, body.getArg! 1)
 
-/-- The signature check: `fn` is a function of signature `sig`. -/
-def checkFunction (fn : Ident) (sig : Term) (producer : Bool := false) : TermElabM Unit := do
+/-- Check `fn` at `sig` and return its resolved declaration for the manifest.
+    Reuse this resolution: elaborating again without the signature can leave
+    a polymorphic function's typeclass arguments undetermined. -/
+def checkFunction (fn : Ident) (sig : Term) (producer : Bool := false) : TermElabM Name := do
   let expected ← elabType sig
   synthesizeSyntheticMVarsNoPostponing
   let expected ← instantiateMVars expected
@@ -1226,6 +1285,7 @@ def checkFunction (fn : Ident) (sig : Term) (producer : Bool := false) : TermEla
   let runner ← synthInstance (mkApp (mkConst (if producer then ``ProducerType else ``FunctionType)) expected)
   checkInstance runner
   checkExecutable (e.getUsedConstants.toList ++ runner.getUsedConstants.toList)
+  return const
 
 -- ── Graphs: inputs and functions as operators ─────────────────────────────────────
 
@@ -1363,30 +1423,32 @@ def dottedName (s : String) : Name :=
     (`functionRef`). -/
 elab "lun_function " name:str " := " fn:ident " : " sig:str : command => do
   let sigStx ← parseEmbeddedTerm sig
-  liftTermElabM (checkFunction fn sigStx)
+  let checked ← liftTermElabM (checkFunction fn sigStx)
   let n := dottedName name.getString
   let sigId := mkIdent (`LunDriver.Sig ++ n)
   let implId := mkIdent (`LunDriver.Impl ++ n)
   let functionId := mkIdent (`LunDriver.Functions ++ n)
   let sigText := Syntax.mkStrLit sig.getString
+  let declaration := Syntax.mkStrLit checked.toString
   elabCommand (← `(abbrev $sigId : Type 1 := $sigStx))
   elabCommand (← `(def $implId : LunDriver.FunctionImpl :=
-    LunDriver.FunctionImpl.ofFn $name $sigText ($fn : $sigId)))
+    { LunDriver.FunctionImpl.ofFn $name $sigText ($fn : $sigId) with declaration := $declaration }))
   elabCommand (← `(def $functionId : LunDriver.FunctionRef $sigId := LunDriver.functionRef $implId))
 
 /-- Check and register a resumable producer using the same closure/effect audit
     as a single-result function. -/
 elab "lun_producer " name:str " := " fn:ident " : " sig:str : command => do
   let sigStx ← parseEmbeddedTerm sig
-  liftTermElabM (checkFunction fn sigStx true)
+  let checked ← liftTermElabM (checkFunction fn sigStx true)
   let n := dottedName name.getString
   let sigId := mkIdent (`LunDriver.Sig ++ n)
   let implId := mkIdent (`LunDriver.Impl ++ n)
   let functionId := mkIdent (`LunDriver.Functions ++ n)
   let sigText := Syntax.mkStrLit sig.getString
+  let declaration := Syntax.mkStrLit checked.toString
   elabCommand (← `(abbrev $sigId : Type 1 := $sigStx))
   elabCommand (← `(def $implId : LunDriver.FunctionImpl :=
-    LunDriver.FunctionImpl.ofProducer $name $sigText ($fn : $sigId)))
+    { LunDriver.FunctionImpl.ofProducer $name $sigText ($fn : $sigId) with declaration := $declaration }))
   elabCommand (← `(def $functionId : LunDriver.ProducerRef $sigId := LunDriver.producerRef $implId))
 
 /-- A producer's output constraint applies to each emitted value, not its step
@@ -1441,6 +1503,9 @@ elab "lun_inputs " name:str " := " constraints:str : command => do
 
 -- ── The graph check ───────────────────────────────────────────────────────────
 
+/-- At most sixteen distinct cell worker scopes per executing graph. -/
+def maxGraphCells : Nat := 16
+
 /-- What a node of a graph is. -/
 inductive NodeKind where
   /-- An input, by name. -/
@@ -1467,10 +1532,11 @@ structure GraphImpl where
   functions : List FunctionImpl
   inputContracts : List (String × InputContract) := []
   context : ExecutionContext := {}
+  /-- Exact admitted package pins, also part of caller-owned state identity. -/
+  cellPins : List (String × String) := []
 
 /-- The builder's primitives, which a graph may reach only through `input` and
-    the functions. (`Reactive.fnImpl` is linen ≥ 1.4.0, so it is named, not
-    resolved: the runtime still compiles against linen 1.3.0.) -/
+    the generated function references. Drivers require Linen 4.1 or newer. -/
 def bannedInGraph : List Name :=
   [ ``Reactive.register, ``Reactive.addNode, `Control.Reactive.Reactive.fnImpl, ``Reactive.fn
   , ``Builder.mk, ``Graph.mk, ``Graph.rebind, ``Operator.mk, ``Operator.splice
@@ -1520,6 +1586,8 @@ def GraphImpl.ofGraph (functions : List FunctionImpl) (g : Graph IO Json) : Exce
         declared functions to inputs and to each other"
   for h : i in [0:kinds.size] do
     if kinds[i] == .start && !startsRead.contains i then throw s!"{describe i} is not read"
+  unless (kinds.toList.filterMap fun | .apply name _ => some name | _ => none).eraseDups.length ≤ maxGraphCells do
+    throw "a graph may use at most 16 distinct native cells"
   let fns : Array (Impl IO Json) := Array.ofFn (n := g.fns.size) fun k =>
       ((fnImpls[k.val]?).map (fun c => c.impl)).getD fun _ => pure (.error "unknown function")
   let graph : Graph IO Json :=
@@ -1784,7 +1852,8 @@ def GraphImpl.idOf (d : GraphImpl) (i : Nat) : Nat := (d.shown.idxOf? i).getD i
 def GraphImpl.nodeJson (d : GraphImpl) (i : Nat) : List (String × Json) :=
   match (d.kinds[i]? : Option NodeKind) with
   | some (.input name) => [("id", d.idOf i), ("input", name)]
-  | some (.apply c args) => [("id", d.idOf i), ("function", c), ("args", toJson (args.map d.idOf))]
+  | some (.apply c args) => ([("id", d.idOf i), ("function", c), ("args", toJson (args.map d.idOf))] : List (String × Json)) ++
+      ((d.cellPins.lookup c).map fun pin => [("cell", Json.str pin)]).getD []
   | _ => [("id", d.idOf i)]
 
 /-- The nodes a node reads (graph indices). -/
@@ -1823,7 +1892,8 @@ structure GraphState where
 /-- Bind state to the exact labelled graph and declared function signatures. -/
 def GraphImpl.stateIdentity (d : GraphImpl) : Json :=
   Json.mkObj [("kinds", toJson d.kinds), ("labels", toJson (d.graph.labels.map toString)),
-    ("functions", toJson (d.functions.map fun c => (c.name, c.signature, c.producer.isSome)))]
+    ("functions", toJson (d.functions.map fun c => (c.name, c.signature, c.producer.isSome))),
+    ("cells", toJson d.cellPins)]
 
 def GraphImpl.producerAt (d : GraphImpl) (i : Nat) : Option ProducerImpl := do
   let .apply name _ ← d.kinds[i]? | none
@@ -1843,7 +1913,8 @@ def GraphState.ofJson (d : GraphImpl) (build graphName : String) (j : Json) : Ex
       let fields ← outcome.getObj?
       unless fields.size == 1 do throw "invalid node outcome in graph state"
       if let .ok value := outcome.getObjVal? "output" then
-        if let some producer := d.producerAt i then producer.validateValue value
+        if let some (.apply name _) := d.kinds[i]? then
+          if let some function := d.functions.find? (·.name == name) then function.validateValue value
         if let some (.input name) := d.kinds[i]? then
           if let some contract := d.inputContracts.lookup name then discard <| contract.validate value
       else if (outcome.getObjValAs? String "error").isOk then pure ()
@@ -2010,9 +2081,116 @@ def GraphState.nextCallAt (st : GraphState) : Option Nat :=
     per call. Remaining work travels in the returned state, not in a worker. -/
 def graphStepBudget : Nat := 256
 
+/-- Validate typed cell arguments and the producer cursor before any effects. -/
+def FunctionImpl.checkInvocation (c : FunctionImpl) (input : Lun.Cell.Invocation) : Except String Unit := do
+  unless input.name == c.name do throw "native cell placement mismatch"
+  unless (← c.contract) == input.contract do throw "native cell contract mismatch"
+  if input.mode == .warm then
+    unless input.arguments.isEmpty && input.continuation.isNone do throw "invalid cell readiness envelope"
+    return ()
+  c.validateArgs input.arguments
+  match c.producer, input.continuation with
+  | some producer, some value => producer.validateState value.value
+  | none, some _ => throw "a non-producer cannot resume a continuation"
+  | _, _ => pure ()
+
+/-- Decode a native outcome envelope; no malformed success enters graph state. -/
+def cellOutcome (reply : Lun.Cell.Reply) : Except String Json := do
+  let fields ← reply.outcome.getObj?
+  unless fields.size == 1 do throw "invalid native cell outcome"
+  match reply.outcome.getObjVal? "output" with
+  | .ok value => return value
+  | .error _ => throw (← reply.outcome.getObjValAs? String "error")
+
+/-- Check success values using the consumer's own Lean dictionaries, including
+    each producer value and its serializable continuation. -/
+def FunctionImpl.checkReply (c : FunctionImpl) (input : Lun.Cell.Invocation)
+    (reply : Lun.Cell.Reply) : Except String Unit := do
+  let fields ← reply.outcome.getObj?
+  unless fields.size == 1 do throw "invalid native cell outcome"
+  if (reply.outcome.getObjValAs? String "error").isOk then return ()
+  let value ← reply.outcome.getObjVal? "output"
+  if input.mode == .warm then
+    unless value == Json.null && reply.log.isEmpty do throw "invalid native cell readiness reply"
+    return ()
+  match c.producer with
+  | none => c.validateValue value
+  | some producer =>
+    let step : ProducerStep ← fromJson? value
+    producer.validateState step.state
+    step.values.forM producer.validateValue
+
+/-- Merge private cell diagnostics under the same total graph-call byte bound. -/
+def appendCellTrace (ctx : ExecutionContext) (message : String) : IO Unit := do
+  if message.isEmpty then return
+  match ctx.traceLog with
+  | none => IO.eprint message
+  | some log =>
+    let previous ← log.get
+    let value := previous.value ++ message
+    if h : value.utf8ByteSize ≤ 1024 * 1024 then log.set ⟨value, h⟩
+    else throw (IO.userError "Trace: per-request log exceeds 1 MiB")
+
+/-- Replace the original implementation with a port into admitted native bytes.
+    There is no fallback to the in-process closure, including for producers. -/
+def FunctionImpl.withNative (c : FunctionImpl) (contract : Lun.Cell.Contract)
+    (run : Lun.Cell.Runner) : FunctionImpl := Id.run do
+  let invoke (arguments : List Json) (now : Nat) (continuation : Option Json) : Execution Json := fun ctx => do
+    let input : Lun.Cell.Invocation :=
+      { name := c.name, contract := contract, arguments := arguments, now := now
+        continuation := continuation.map Lun.Cell.Continuation.mk, context := ctx.toRequest }
+    IO.ofExcept ((c.checkInvocation input).mapError IO.userError)
+    let reply ← run input
+    IO.ofExcept ((c.checkReply input reply).mapError IO.userError)
+    appendCellTrace ctx reply.log
+    IO.ofExcept ((cellOutcome reply).mapError IO.userError)
+  return { c with
+    call := fun args => invoke args 0 none
+    producer := c.producer.map fun producer => { producer with
+      call := fun args now state => do
+        let result ← invoke args now state
+        IO.ofExcept ((fromJson? result : Except String ProducerStep).mapError IO.userError) } }
+
+private def withNativeRunners (cells : List (FunctionImpl × System.Cell.Verified))
+    (functions : List FunctionImpl) (timeoutMillis : Nat) (readinessContext : Json)
+    (action : List FunctionImpl → IO α) : IO α := do
+  match cells with
+  | [] => action functions
+  | (c, package) :: rest =>
+    let contract ← IO.ofExcept (c.contract.mapError IO.userError)
+    let adapter ← Lun.Cell.codecs contract c.checkInvocation c.checkReply
+    Lun.Cell.withRunner package adapter timeoutMillis fun run => do
+      let ready ← run { mode := .warm, name := c.name, contract, arguments := [], context := readinessContext }
+      discard <| IO.ofExcept ((cellOutcome ready).mapError IO.userError)
+      withNativeRunners rest (c.withNative contract run :: functions) timeoutMillis readinessContext action
+
+/-- Admit every used computation before opening workers or executing effects.
+    The server overwrites `_cells` and `_runtime`; saved state supplies neither. -/
+def GraphImpl.withNativeCells (d : GraphImpl) (req : Json) (action : GraphImpl → IO α) : IO α := do
+  let names := (d.kinds.toList.filterMap fun | .apply name _ => some name | _ => none).eraseDups
+  unless names.length ≤ maxGraphCells do throw (IO.userError "a graph may use at most 16 distinct native cells")
+  if names.isEmpty then return ← action d
+  let bindings : List Lun.Cell.Binding ← IO.ofExcept
+    ((req.getObjValAs? (List Lun.Cell.Binding) "_cells").mapError fun _ => IO.userError "the graph has no compiler-attested cells; rebuild it")
+  let keyring ← IO.ofExcept
+    ((req.getObjVal? "_runtime" >>= fun runtime => runtime.getObjValAs? String "LUN_CELL_KEYRING").mapError
+      fun _ => IO.userError "LUN_CELL_KEYRING is required to execute a graph")
+  let cells ← names.mapM fun name => do
+    let some c := d.functions.find? (·.name == name) | throw (IO.userError s!"unknown cell '{name}'")
+    let matching := bindings.filter (·.name == name)
+    let [binding] := matching | throw (IO.userError s!"cell '{name}' must have exactly one pinned package")
+    let contract ← IO.ofExcept (c.contract.mapError IO.userError)
+    return (c, ← binding.admit contract ⟨keyring⟩)
+  let lease ← IO.ofExcept ((req.getObjVal? "_runtime" >>= fun runtime => runtime.getObjValAs? String "LUN_CELL_LEASE").mapError IO.userError)
+  let timeoutMillis ← IO.ofExcept ((req.getObjVal? "_runtime" >>= fun runtime => runtime.getObjValAs? Nat "LUN_CELL_CALL_TIMEOUT_MS").mapError IO.userError)
+  let readinessContext := Json.mkObj [("_runtime", Json.mkObj [("LUN_CELL_LEASE", Json.str lease)])]
+  withNativeRunners cells [] timeoutMillis readinessContext fun functions =>
+    action { d with functions, cellPins := names.map fun name =>
+      (name, ((bindings.find? (·.name == name)).map (·.pin.digest.hex)).getD "") }
+
 /-- Execute a graph step. Fresh inputs take precedence over older scheduled
     work. Every effect uses this request's context, including on a wake-up. -/
-def runGraph (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+private def runAdmittedGraph (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace)) : IO (Except String Json) := do
   let ctx ← match ExecutionContext.ofRequest req traceLog with | .ok c => pure c | .error e => return .error e
   let build := (req.getObjValAs? String "_build").toOption.getD ""
   let graphName := (req.getObjValAs? String "_graph").toOption.getD ""
@@ -2060,6 +2238,35 @@ def runGraph (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrac
   return .ok (Json.mkObj [("state", toJson st), ("nodes", d.nodesJson st d.shown),
     ("changed", toJson changed), ("nextCallAt", toJson st.nextCallAt)])
 
+/-- Execute only pinned, signed native cells; admit the entire DAG before any
+    effects. State and scheduling retain the caller-owned graph-step protocol. -/
+def runGraph (d : GraphImpl) (req : Json) (traceLog : Option (IO.Ref BoundedTrace) := none) : IO (Except String Json) := do
+  try IO.FS.withTempDir fun directory => do
+    let lease := directory / "cell-lease"
+    let stopped ← IO.mkRef false
+    let refresh : IO Unit := do
+      -- Readers must see either complete timestamp. A truncating overwrite can
+      -- otherwise make a live worker look orphaned during a refresh.
+      let temp := lease.withExtension "tmp"
+      IO.FS.writeFile temp (toString (← IO.monoMsNow))
+      IO.FS.rename temp lease
+    refresh
+    let heartbeat ← IO.asTask (prio := .dedicated) do
+      let mut next := (← IO.monoMsNow) + 1000
+      repeat
+        if ← stopped.get then break
+        if (← IO.monoMsNow) ≥ next then
+          refresh
+          next := (← IO.monoMsNow) + 1000
+        IO.sleep 25
+    let runtime := (req.getObjVal? "_runtime").toOption.getD (Json.mkObj [])
+    let req := req.setObjVal! "_runtime" (runtime.setObjVal! "LUN_CELL_LEASE" (toJson lease.toString))
+    try d.withNativeCells req fun graph => runAdmittedGraph graph req traceLog
+    finally
+      stopped.set true
+      let _ ← IO.wait heartbeat
+  catch error => return .error (toString error)
+
 /-- The build's functions and graphs, with each graph's structure: its nodes, its
     sources (nodes reading none) and its sinks (nodes none reads). -/
 def describe (functions : List FunctionImpl) (graphs : List (String × GraphImpl)) : Json :=
@@ -2067,7 +2274,7 @@ def describe (functions : List FunctionImpl) (graphs : List (String × GraphImpl
     [ ("runtimeContract", Json.str runtimeContract)
     , ("functions", Json.arr (functions.map fun c => Json.mkObj
         [("name", c.name), ("signature", c.signature), ("arity", c.arity),
-         ("producer", toJson c.producer.isSome)]).toArray)
+         ("producer", toJson c.producer.isSome), ("contract", toJson c.contract.toOption)]).toArray)
     , ("graphs", Json.arr (graphs.map fun (name, d) =>
         let read := d.shown.flatMap d.argsOf
         Json.mkObj
@@ -2148,6 +2355,49 @@ def superviseParent (leaseFile : String) : IO Unit := do
       let _ ← System.Process.run "sh" #["-c", "kill -s KILL -- \"-$PPID\""] 1000
       IO.Process.exit 0
 
+/-- A packaged worker dispatches only exact compiled contracts. Input decoding
+    precedes effect interpretation; each message binds fresh request authority. -/
+def nativeWorkerMain (functions : List FunctionImpl) : IO UInt32 := do
+  let stdin ← IO.getStdin
+  let stdout ← IO.getStdout
+  let mut supervised := false
+  repeat
+    let line ← stdin.getLine
+    if line.isEmpty then break
+    unless line.utf8ByteSize ≤ 64 * 1024 * 1024 + 1 do throw (IO.userError "cell request exceeds 64 MiB")
+    let message ← IO.ofExcept ((Json.parse line >>= fromJson? : Except String Lean.JsonRpc.Message).mapError IO.userError)
+    let .request id "call" (some (.arr args)) := message | throw (IO.userError "expected a native cell call")
+    let result : Except String Json ← try
+      let [json] := args.toList | throw (IO.userError "expected one native invocation")
+      let input : Lun.Cell.Invocation ← IO.ofExcept ((fromJson? json).mapError IO.userError)
+      let some c := functions.find? (fun c => c.name == input.name && c.contract.toOption == some input.contract)
+        | throw (IO.userError "the native worker does not contain that checked cell contract")
+      let adapter ← Lun.Cell.codecs input.contract c.checkInvocation c.checkReply
+      let input ← IO.ofExcept ((adapter.decodeInput args.toList).mapError IO.userError)
+      if !supervised then
+        if let .ok lease := input.context.getObjVal? "_runtime" >>= fun runtime => runtime.getObjValAs? String "LUN_CELL_LEASE" then
+          let _ ← IO.asTask (prio := .dedicated) (superviseParent lease)
+          supervised := true
+      let log ← IO.mkRef emptyTrace
+      let outcome ← try
+        if input.mode == .warm then pure (Json.mkObj [("output", Json.null)]) else do
+          let ctx ← IO.ofExcept ((ExecutionContext.ofRequest input.context (some log)).mapError IO.userError)
+          let ctx := { ctx with functionName := c.name }
+          let output ← match c.producer with
+            | none => c.call input.arguments ctx
+            | some producer => toJson <$> producer.call input.arguments input.now (input.continuation.map (·.value)) ctx
+          pure (Json.mkObj [("output", output)])
+      catch error => pure (Json.mkObj [("error", Json.str (toString error))])
+      let reply : Lun.Cell.Reply := {outcome, log := (← log.get).value}
+      pure (.ok (adapter.encodeOutput input reply))
+    catch error => pure (.error (toString error))
+    let response := match result with
+      | .ok value => Lean.JsonRpc.Message.response id value
+      | .error error => Lean.JsonRpc.Message.responseError id .invalidParams error none
+    stdout.putStrLn (toJson response).compress
+    stdout.flush
+  return 0
+
 /-- Multiple compact JSON frames on stdin/stdout. A response has its own status
     and bounded request-local log; stderr is not a shared log transport. -/
 def workerMain (functions : List FunctionImpl) (graphs : List (String × Except String GraphImpl))
@@ -2200,6 +2450,7 @@ def driverMain (functions : List FunctionImpl) (graphs : List (String × Except 
     let text ← (← IO.getStdin).readToEnd
     pure (if text.trimAscii.isEmpty then .ok (Json.mkObj []) else Json.parse text)
   match args with
+  | [] => nativeWorkerMain functions
   | ["worker", leaseFile] => workerMain functions graphs leaseFile
   | ["describe"] =>
     match graphs.findSome? fun (name, d) => (GraphImpl.error? d).map (name, ·) with
