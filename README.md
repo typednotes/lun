@@ -46,6 +46,8 @@ Try the [Lode-to-cells guide](docs/lode-local-dag.md) and its
 [colorful shell launcher](Examples/lode-dag/run.sh): author cells with AI in an
 image, compile a local `/tmp` DAG, and step through caller-owned state.
 
+**Lun 0.4.8** uses Linen 5.0.0 in the runner, image cache, and examples.
+
 **Lun 0.4.4** has no user-visible change: it makes the build stricter (no
 auto-bound implicits; warnings fail CI). See [its release notes](docs/release-0.4.4.md).
 
@@ -562,7 +564,7 @@ docker run --rm -p 8080:8080 -v lun:/var/lib/lun \
 ```
 
 The image carries the Lean toolchain and a package cache of linen
-(`LINEN_REF` defaults to the Linen 5.0.0 commit) pre-built for what functions need, so a build
+(`LINEN_REF` uses the pinned Linen 5.0.0 release commit) pre-built for what functions need, so a build
 compiles only the project and its functions. To build it locally:
 `docker build -t lun .` (or `podman build`).
 

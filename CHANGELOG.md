@@ -20,17 +20,35 @@ Releases before 0.4.4 are described in their git tags and in `docs/release-*.md`
 
 ### Changed
 
-- Build with [Linen 5.0.0](https://github.com/typednotes/linen/commit/bcfec9a81d6e738ecb273f89e2102b4712d8e160).
-- Upgrade Linen to 4.1.0; align CI/image/example pins and example Lean toolchains.
 - Strip non-runtime ELF symbols when linking Linux drivers to keep native cell
   payloads within Linen's 128 MiB bound; retain loader/dynamic symbols.
 - Native DAG artifacts use `stateless-cells-v5`; rebuild legacy artifacts and
   start fresh graph state. Result types require `FromJson` as well as `ToJson`.
   A graph supports at most 16 distinct native cells.
 
-- `autoImplicit` is back to Lean's default (on): it automates implicit binders,
-  which are still fully checked, so it is not a weakening (agents-md standard v4).
-  Warnings still fail the build (`lake build --wfail`).
+## [0.4.8] — 2026-11-27
+
+### Changed
+
+- Build with [Linen 5.0.0](https://github.com/typednotes/linen/releases/tag/v5.0.0).
+
+## [0.4.7] — 2026-11-27
+
+### Changed
+
+- Update the Linen dependency to [4.1.0](https://github.com/typednotes/linen/releases/tag/v4.1.0).
+
+## [0.4.6] — 2026-11-27
+
+### Changed
+
+- Upgrade the runner, image cache, and runnable examples to Linen 4.0.0 at its [release commit](https://github.com/typednotes/linen/commit/037925bc5068c54efd86690b78b258b9c6787959).
+- Restored Lean’s default implicit binders. CI continues to reject compiler warnings.
+
+### Fixed
+
+- Retain Lean’s assertion symbol in generated macOS drivers so compiled
+  project modules can load.
 
 ## [0.4.4] — 2026-11-17
 
