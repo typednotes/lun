@@ -1,12 +1,12 @@
 name = "pricing"
 defaultTargets = ["Pricing"]
 
-# A real project pins linen by tag. (`Examples/run.sh LINEN_DIR` swaps this
+# The example pins the Linen 5.0.0 commit. (`Examples/run.sh LINEN_DIR` swaps this
 # for a local checkout, to reuse its build.)
 [[require]]
 name = "linen"
 git = "https://github.com/typednotes/linen"
-rev = "v4.1.0"
+rev = "bcfec9a81d6e738ecb273f89e2102b4712d8e160"
 
 [[lean_lib]]
 name = "Pricing"
