@@ -7,14 +7,14 @@
 # LINEN_REF (`ci/native-deps/apt.txt`).
 #
 #   podman build -t lun .
-#   podman build --build-arg LINEN_REF=037925bc5068c54efd86690b78b258b9c6787959 -t lun .
+#   podman build --build-arg LINEN_REF=v4.1.0 -t lun .
 #
 # LINEN_REF is the linen version pre-built into the package cache. Projects
 # locked to that exact revision start from it; any other revision builds its
 # own Linen checkout from scratch.
 
 FROM docker.io/library/ubuntu:24.04 AS base
-ARG LINEN_REF=037925bc5068c54efd86690b78b258b9c6787959
+ARG LINEN_REF=v4.1.0
 ADD https://raw.githubusercontent.com/typednotes/linen/${LINEN_REF}/ci/native-deps/apt.txt /tmp/linen-apt.txt
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tar gzip python3 $(sed 's/#.*//' /tmp/linen-apt.txt) \

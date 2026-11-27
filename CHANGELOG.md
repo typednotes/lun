@@ -7,6 +7,12 @@ Releases before 0.4.4 are described in their git tags and in `docs/release-*.md`
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-11-27
+
+### Changed
+
+- Update the Linen dependency to [4.1.0](https://github.com/typednotes/linen/releases/tag/v4.1.0).
+
 ## [0.4.6] — 2026-11-27
 
 ### Changed

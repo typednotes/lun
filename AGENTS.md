@@ -14,8 +14,7 @@ signature) and one per **graph** of functions (a program in linen's
 inputs, receives changed values, updated state and `nextCallAt`, persists state
 in its database, and schedules further calls. Lun retains compiled code in warm
 workers, never execution records. See `README.md` and `docs/user-guide.md`.
-Current runner release: **Lun 0.4.6**, with Linen 4.0.0 and Liaison's pure
-0.6.0 SDK. The release set below records the earlier whole-pipeline verification.
+This checkout uses Linen 4.1.0 and Liaison's pure 0.6.0 SDK. The release set below records the earlier whole-pipeline verification.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
 Coordinated release set: **Lun 0.3.0 / Lode 0.3.0 / Typednotes 0.6.0 /
