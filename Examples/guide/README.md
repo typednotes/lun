@@ -7,8 +7,8 @@ client that checks the examples against real compiled drivers.
 From the Lun repository root:
 
 ```sh
-uv run Examples/guide/run.py
-uv run Examples/guide/run.py --transport http
+python3 test/cell_compiler.py -- uv run Examples/guide/run.py
+python3 test/cell_compiler.py -- uv run Examples/guide/run.py --transport http
 ```
 
 Requests and responses use Rich-formatted JSON. Add `--quiet` to print only the
@@ -24,8 +24,8 @@ nested loops, continue/break, reusable fragments, five-second sources and waits
 within repeating blocks. Its helper ships in **Linen v1.12.0**:
 
 ```sh
-uv run Examples/guide/run.py --producers
-uv run Examples/guide/run.py --producers --transport http
+python3 test/cell_compiler.py -- uv run Examples/guide/run.py --producers
+python3 test/cell_compiler.py -- uv run Examples/guide/run.py --producers --transport http
 ```
 
 [`project/Producers.lean`](project/Producers.lean) contains the source;
@@ -39,7 +39,7 @@ per-invocation Lake package override.
 To prepare a persistent folder for the guide's manual CLI/HTTP recipes:
 
 ```sh
-uv run Examples/guide/run.py --prepare /absolute/path/to/a/new/project
+python3 test/cell_compiler.py -- uv run Examples/guide/run.py --prepare /absolute/path/to/a/new/project
 ```
 
 Preparation copies the example and resolves its local Linen dependency without

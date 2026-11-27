@@ -11,6 +11,9 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
+if [ -z "${LUN_CELL_SIGNING_KEY:-}" ]; then
+  exec python3 "$here/cell_compiler.py" -- bash "$0" "$@"
+fi
 root="$(cd "$here/.." && pwd)"
 linen="$(cd "${1:-$root/../linen}" && pwd)"
 port="${LUN_E2E_PORT:-$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}"
@@ -164,6 +167,7 @@ expect "the graph, a missing input waits while its independent source runs" 200 
   "$(api POST "/v0/builds/$id/graphs/main" '{"inputs": {}}')"
 
 # ── Stateless state round-trips, bursts, scheduling and authority ─────────────
+python3 "$here/native_cells.py" "$base" "$id" "$work/lun"
 python3 "$here/stateless.py" "$base" "$id" "$work/caller.sqlite"
 pass "caller-owned state, scheduled producers and incremental graph execution"
 

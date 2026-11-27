@@ -15,6 +15,10 @@ inputs, receives changed values, updated state and `nextCallAt`, persists state
 in its database, and schedules further calls. Lun retains compiled code in warm
 workers, never execution records. See `README.md` and `docs/user-guide.md`.
 This checkout uses Linen 5.0.0 and Liaison's pure 0.6.0 SDK. The release set below records the earlier whole-pipeline verification.
+The working tree requires **Linen 5.0.0 / Lean 4.36.0**. DAG computation
+placements execute pinned, signed native cells (`stateless-cells-v5`); configure
+`LUN_CELL_SIGNING_KEY`, `LUN_CELL_SIGNING_HOME` and `LUN_CELL_KEYRING`. See
+`docs/native-cells.md` and `Lun/Cell/SPEC.md`. Old artifacts/state require rebuilding.
 It is the runner; `lode` is the agent that writes the projects it runs —
 do not confuse the two.
 Coordinated release set: **Lun 0.3.0 / Lode 0.3.0 / Typednotes 0.6.0 /
@@ -435,9 +439,12 @@ their original workflows and must not be moved to adopt this behavior.
   positive/denial pipeline. Liaison passes 655 real broker HTTP cases. Controlled
   provider replies do not establish live paid-provider/OAuth conformance.
 
-- **The container image has not been built here** (the local podman needed an
-  interactive registry login). The Linux link of `lun` and of drivers is
-  unverified; lun's own link and the drivers' were verified on macOS.
+- **Local container verification (2026-11-27):** Podman built Lode and Lun's
+  `cell-demo` target for `aarch64-unknown-linux-gnu`. The scripted local DAG demo
+  compiled three signed cells, checked five calls, refused a wrong-type input
+  and resumed caller state after restart. Linux linking strips non-runtime ELF
+  symbols to meet Linen's 128 MiB artifact bound. This covers the small pure DAG;
+  it does not establish the full Linux broker suite or live AI/OAuth conformance.
 - **Types are not a sandbox.** The executable closure and JSON dictionaries are
   now audited transitively for unsafe/implemented-by/extern, axioms, project
   initializers and raw IO/runtime entry points. Lakefiles and metaprograms still

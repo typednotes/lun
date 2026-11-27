@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" role="img" aria-labelledby="title desc">
+<title id="title">Lode authors local cells; Lun compiles and steps their DAG</title>
+<desc id="desc">A client terminal gives AI access to a Lode container. Lode publishes checked source to a local tmp Git repository. A separate offline Lun compiler signs subtotal, tax and total native cell packages. Price and quantity feed subtotal; subtotal feeds tax and total; tax also feeds total. Each call returns caller-owned JSON state.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#52657d"/></marker></defs>
+<rect width="900" height="420" rx="16" fill="#f4f7fc"/>
+<g font-family="system-ui,sans-serif" font-size="15" text-anchor="middle" fill="#15273e">
+<text x="450" y="30" font-size="19" font-weight="700">Create once, then call the signed cells with caller-owned state</text>
+<g stroke="#597594" fill="#fff" stroke-width="1.5">
+<rect x="24" y="60" width="180" height="84" rx="9"/>
+<rect x="244" y="60" width="190" height="84" rx="9"/>
+<rect x="474" y="60" width="190" height="84" rx="9"/>
+<rect x="704" y="60" width="172" height="84" rx="9"/>
+</g>
+<text x="114" y="88" font-weight="700">Client launcher</text><text x="114" y="113">Browser + hidden key</text><text x="114" y="132" font-size="12">AI access stays with Lode</text>
+<text x="339" y="88" font-weight="700">Lode image</text><text x="339" y="113">edit → check → publish</text><text x="339" y="132" font-size="12">/tmp/…/writer/project.git</text>
+<text x="569" y="88" font-weight="700">Lun compiler image</text><text x="569" y="113">compile → sign → pin</text><text x="569" y="132" font-size="12">No network during compilation</text>
+<text x="790" y="88" font-weight="700">Three local Cells</text><text x="790" y="113">manifest + signature</text><text x="790" y="132" font-size="12">+ native worker under /tmp</text>
+<g stroke="#52657d" stroke-width="2" fill="none" marker-end="url(#arrow)"><path d="M204 102H240"/><path d="M434 102H470"/><path d="M664 102H700"/><path d="M790 146V178H450V204"/></g>
+<text x="450" y="193" font-size="12">Every computation placement carries its exact manifest pin</text>
+<g stroke="#597594" fill="#fff" stroke-width="1.5"><rect x="65" y="220" width="140" height="44" rx="9"/><rect x="65" y="287" width="140" height="44" rx="9"/></g>
+<text x="135" y="248">price : Nat</text><text x="135" y="315">quantity : Nat</text>
+<g stroke="#347c70" fill="#e2f5ed" stroke-width="1.5"><rect x="295" y="242" width="150" height="58" rx="9"/><rect x="525" y="220" width="130" height="52" rx="9"/><rect x="725" y="260" width="130" height="58" rx="9"/></g>
+<text x="370" y="266" font-weight="700">subtotal cell</text><text x="370" y="286" font-size="12">price × quantity</text><text x="590" y="242" font-weight="700">tax cell</text><text x="590" y="261" font-size="12">subtotal / 10</text><text x="790" y="284" font-weight="700">total cell</text><text x="790" y="305" font-size="12">subtotal + tax</text>
+<g stroke="#52657d" stroke-width="2" fill="none" marker-end="url(#arrow)"><path d="M205 242L290 260"/><path d="M205 309L290 283"/><path d="M445 259L520 245"/><path d="M445 284H720"/><path d="M655 245L720 273"/></g>
+<text x="450" y="367" font-weight="700">220 → 330 → 330 (unchanged) → 660 → restart → 880</text>
+<text x="450" y="396">Each call supplies JSON state and receives changed values, updated state and nextCallAt</text>
+</g></svg>

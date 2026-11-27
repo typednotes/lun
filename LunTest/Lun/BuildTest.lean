@@ -36,4 +36,13 @@ def diag (sev : String) (file : String) : Diagnostics.Diagnostic :=
 #guard !reportable (diag "warning" "Fixture/X.lean")
 #guard reportable (diag "warning" "LunDriver/Functions/F0.lean")
 
+-- S2/S4: persisted ready builds retain the independent native package pins.
+def pinnedStatus : Status := { status with description := some (Json.mkObj [
+  ("functions", Json.arr #[]), ("graphs", Json.arr #[]),
+  ("runtimeContract", Driver.runtimeContract), ("cells", toJson ["pinned-native-cell"])]) }
+#guard ((Status.ofJson (toJson pinnedStatus)).toOption.bind (·.description) |>.bind
+  (fun description => (description.getObjValAs? (List String) "cells").toOption)) == some ["pinned-native-cell"]
+#guard (BoundedRuntime.check? { status with description := some (Json.mkObj [
+  ("runtimeContract", "stateless-producers-v4")]) }).isNone
+
 end LunTests.Build

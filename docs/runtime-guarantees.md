@@ -1,5 +1,18 @@
 # Notebook runtime authority
 
+## Signed native DAG cells
+
+Every DAG computation executes a pinned Linen 4.1 `System.Cell` package,
+including resumable producer steps. Compiler manifests attest the checked
+source/contract, target, ABI, codecs and native payload. The entire graph's
+packages are verified before effects, using operator-provisioned compiler keys.
+Invocation authority remains fresh and is sent only through private stdin;
+the consumer independently decodes results and producer state/emissions.
+Each graph call owns/reuses at most 16 distinct native workers and reaps them.
+Named graph inputs remain caller-owned data. See [native cells](native-cells.md)
+for signing configuration, the precise attestation inputs and build-isolation
+requirements, and the numbered [cell contract](../Lun/Cell/SPEC.md).
+
 ## Stateless execution and caller-owned scheduling
 
 `POST /v0/builds/{id}/graphs/{name}` takes optional previous `state`, input
@@ -84,10 +97,12 @@ are service configuration injected into private driver stdin by `Builder.call`;
 the caller cannot replace them. Driver/build processes have service credentials
 removed from their environment. `_runtime` is never persisted or returned.
 
-Ready artifacts must attest `runtimeContract: "stateless-producers-v4"`. The server
+Ready artifacts must attest `runtimeContract: "stateless-cells-v5"`. The server
 consumes a `BoundedRuntime` witness before invoking a driver. Older cached
 executables are refused with 409 and resubmission rebuilds them, so deploying
 the new server cannot silently retain a legacy unbounded effect interpreter.
+Graph state identity also includes exact native manifest pins. Old artifacts
+and old graph state require rebuilding/restarting for the native cell runtime.
 
 ## Loaded graph/process cache (Lun 0.4.0)
 

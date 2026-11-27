@@ -7,6 +7,25 @@ Releases before 0.4.4 are described in their git tags and in `docs/release-*.md`
 
 ## [Unreleased]
 
+### Added
+
+- DAG computations execute compiler-signed native cell packages through Linen's
+  owned workers, with manifest pins, independent source/ABI/codec checks, typed
+  native result decoding and fresh authority. Caller-owned state binds cell pins;
+  all packages are admitted before effects and workers are reaped per graph step.
+- Operator compiler signing configuration and disposable local signing fixtures.
+- Illustrated Lode-to-local-cells guide and colorful `/tmp` DAG shell demo,
+  with client browser/hidden-key prompts, explicit scripted rehearsal, signed
+  package export and caller-state restart checks. Opt-in `cell-demo` image target.
+
+### Changed
+
+- Strip non-runtime ELF symbols when linking Linux drivers to keep native cell
+  payloads within Linen's 128 MiB bound; retain loader/dynamic symbols.
+- Native DAG artifacts use `stateless-cells-v5`; rebuild legacy artifacts and
+  start fresh graph state. Result types require `FromJson` as well as `ToJson`.
+  A graph supports at most 16 distinct native cells.
+
 ## [0.4.8] — 2026-11-27
 
 ### Changed

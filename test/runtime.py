@@ -164,7 +164,10 @@ def main():
                 (ROOT / ".lake/build/bin/lun", dict(LUN_PORT=str(lun_port), LUN_TOKEN="fixture-lun", LUN_WORKDIR=str(directory / "lun"), LUN_ALLOW_LOCAL="1", LUN_BUILD_TIMEOUT=str(options.build_timeout), LUN_LIAISON_SDK_PATH=str(ROOT.parent / "liaison"), LUN_LIAISON_URL=f"http://127.0.0.1:{broker_port}", LUN_TEMP_ROOT=str(directory / "temporary")), "lun")):
                 logfile = directory / f"{name}.log"
                 log = logfile.open("w")
-                proc = subprocess.Popen([str(binary)], env=dict(env, **settings), stdout=log, stderr=log)
+                compiler = ({key: value for key, value in os.environ.items() if key in
+                             ("LUN_CELL_SIGNING_KEY", "LUN_CELL_SIGNING_HOME", "LUN_CELL_KEYRING")}
+                            if name == "lun" else {})
+                proc = subprocess.Popen([str(binary)], env=dict(env, **settings, **compiler), stdout=log, stderr=log)
                 processes.append((proc, log))
                 wait_health(f"http://127.0.0.1:{settings.get('LUN_PORT', broker_port)}", proc, logfile)
             base = f"http://127.0.0.1:{lun_port}"
@@ -481,4 +484,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "LUN_CELL_SIGNING_KEY" not in os.environ:
+        from cell_compiler import compiler_environment
+        with compiler_environment() as settings:
+            os.environ.update(settings)
+            main()
+    else:
+        main()

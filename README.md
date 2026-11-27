@@ -29,11 +29,22 @@ fetches the project, checks every signature and every graph, compiles it, and
 serves it over HTTP or stdin/stdout. Graph execution is **stateless**: a call
 accepts inputs and optional previous state, and returns changed intermediate/sink
 values, updated JSON state, and `nextCallAt`. The caller persists that state in
-its database and schedules further calls. Compiled code stays loaded in warm workers.
+its database and schedules further calls. Compiled code stays loaded in warm workers. This checkout uses Linen 5.0.0.
 
 **New to Lun? Read the [illustrated user guide](docs/user-guide.md)** for the
 build/run mental model, SVG figures, and a verified cookbook of CLI, HTTP,
 function, stateless graph, delayed-producer, error-recovery and scoped-effect examples.
+
+**Unreleased: DAGs execute signed native cells.** Linen 4.1 supplies the package
+format, admission and owned workers. Lun attests checked compiler outputs, pins
+every computation placement and verifies all cells before graph effects.
+Configure the compiler signing key/home and public keyring before building
+graphs; see [native cells](docs/native-cells.md). Existing graph artifacts and
+state require rebuilding for `stateless-cells-v5`.
+
+Try the [Lode-to-cells guide](docs/lode-local-dag.md) and its
+[colorful shell launcher](Examples/lode-dag/run.sh): author cells with AI in an
+image, compile a local `/tmp` DAG, and step through caller-owned state.
 
 **Lun 0.4.8** uses Linen 5.0.0 in the runner, image cache, and examples.
 
@@ -109,7 +120,9 @@ compute and graph-vault effects use lun's private service identity.
   for proofs, integration metadata, supported operations and trusted boundaries.
 - **Reactive graphs** — written in linen's `Reactive` monad, where each
   function applies to observables; wiring a function to a value of the wrong
-  type does not compile, and a graph may only apply the declared functions.
+  type does not compile. Every computation runs a pinned, compiler-signed native
+  cell, with independently checked arguments/results and fresh call authority.
+  Each graph step owns/reuses at most 16 distinct cell workers and reaps them.
 - **Stateless incremental execution** — supply the previous JSON state and
   changed inputs; only affected functions run. An unchanged input runs nothing.
   The caller can persist the result and resume it on another warm worker.
@@ -325,7 +338,8 @@ service described below. `lun --help` summarizes the two modes.
 - **A function** is a function of the project under a name and a declared
   signature: `α₁ → … → αₙ → Eff effs β`. Each argument is a JSON value (a
   `Lean.FromJson` type), or `Unit` for none; the result is linen's effect
-  monad `Eff` over a row of effects, producing a JSON value (`Lean.ToJson`).
+  monad `Eff` over a row of effects, producing a JSON value (`Lean.ToJson` and
+  `Lean.FromJson`, for independent native-result decoding).
   The row is the function's effect whitelist.
 - **A producer** adds `producer:true` to its declaration. Its signature ends in
   `Nat → Option S → Eff effs (List β × S × Option Nat)` after the graph arguments.
@@ -512,11 +526,14 @@ LUN_WORKDIR=/tmp/lun LUN_TOKEN=… LUN_LIAISON_URL=http://localhost:8080 lake ex
 | `LUN_TEMP_ROOT` | `/tmp/typednotes` | temporary files, confined beneath organization/user directories |
 | `LUN_BUILD_TIMEOUT` / `LUN_FETCH_TIMEOUT` / `LUN_CALL_TIMEOUT` | `3600` / `600` / `60` | seconds |
 | `LUN_WORKERS` | `4` | loaded compiled workers across all builds/actors; integer 1–16; queue time is part of the call deadline |
+| `LUN_CELL_SIGNING_KEY` | — | full compiler OpenPGP signing fingerprint; required for DAG builds |
+| `LUN_CELL_SIGNING_HOME` | — | existing, isolated compiler GnuPG home; required for DAG builds |
+| `LUN_CELL_KEYRING` | — | trusted compiler public keyring; required for DAG builds/execution |
 | `LUN_PACKAGE_CACHE` | — | pre-built linen checkouts, `{cache}/linen/{rev}` |
 | `LUN_ID_SALT` | random for HTTP; persisted for CLI | salt for build ids; set it for HTTP so ids (and ready builds) survive restarts |
 | `LUN_ALLOW_LOCAL` | enabled by `cli` | `1`: accept folders, `file://` repositories and path dependencies for local development |
 
-Needs `git`, Python 3, libpq development files, `elan`/`lake` and linen's native build dependencies on the
+Needs `git`, Python 3, GnuPG/`gpgv`, libpq development files, `elan`/`lake` and linen's native build dependencies on the
 `PATH` (see the [`Dockerfile`](https://github.com/typednotes/lun/blob/main/Dockerfile)).
 
 ## Docker

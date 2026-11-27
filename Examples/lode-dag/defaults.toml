@@ -1,0 +1,23 @@
+[demo]
+engine = "podman"
+mode = "live"
+lode_image = "localhost/lode:cells-demo"
+lun_image = "localhost/lun:cells-demo"
+lode_container = ""
+lode_source = "../lode"
+build = false
+output = "/tmp/lode-dag.XXXXXX"
+keep_containers = false
+interactive = false
+max_steps = 8
+max_tokens = 4096
+model_timeout = 120
+run_timeout = 600
+build_timeout = 480
+call_timeout = 120
+provider = ""
+api = ""
+base_url = ""
+model = ""
+key_env = "LODE_MODEL_API_KEY"
+auth_url = ""

@@ -11,7 +11,7 @@ With [uv](https://docs.astral.sh/uv/getting-started/installation/) installed,
 run from the Lun repository root:
 
 ```sh
-uv run Examples/interactive/run.py
+python3 test/cell_compiler.py -- uv run Examples/interactive/run.py
 ```
 
 The script builds Lun, copies `project/` into a temporary folder, points its
@@ -107,7 +107,7 @@ equal consecutive values still propagate but unchanged outcomes are omitted.
 Use the identical interaction over a local HTTP REST server:
 
 ```sh
-uv run Examples/interactive/run.py --transport http
+python3 test/cell_compiler.py -- uv run Examples/interactive/run.py --transport http
 ```
 
 Run a repeatable demonstration without prompts. It checks the compiled outputs
@@ -115,8 +115,8 @@ and wake-ups for all four producers, empty lists, input replacement, and the
 original function/graph examples:
 
 ```sh
-uv run Examples/interactive/run.py --demo
-uv run Examples/interactive/run.py --transport http --demo
+python3 test/cell_compiler.py -- uv run Examples/interactive/run.py --demo
+python3 test/cell_compiler.py -- uv run Examples/interactive/run.py --transport http --demo
 ```
 
 Each transport reports `16 interactive demo checks passed` on success.

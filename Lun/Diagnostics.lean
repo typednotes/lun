@@ -69,7 +69,9 @@ def inProgram (d : Diagnostic) (start : Nat × Nat) : Diagnostic :=
 
 /-- A hint for messages that come from a linen predating lun's runtime. -/
 def linenTooOldHint (d : Diagnostic) : Option String :=
-  if (d.message.splitOn "Linen.Control.Reactive").length > 1 ||
+  if (d.message.splitOn "Linen.System.Cell").length > 1 then
+    some "lun's native cell runtime requires linen ≥ 4.1.0; update the project's linen dependency and lake-manifest.json"
+  else if (d.message.splitOn "Linen.Control.Reactive").length > 1 ||
      (d.message.splitOn "Linen.Control.Monad.Effect.Handler").length > 1 then
     some "the project's linen predates 1.3.0, which lun's functions and graphs need"
   else none

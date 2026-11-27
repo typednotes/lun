@@ -9,6 +9,15 @@ Each open item names where it comes from; re-check before acting.
 Moves into linen follow linen's `AGENTS.md` ("Importing external code"): the
 linen change and the deletion here (and in lode) happen in the same pass.
 
+## Reusable native cell packages
+
+- [ ] Adopt already-published signed cell variants across independent builds,
+  without compiling their implementations again. Current builds attest local
+  variants and pin each DAG placement; registry/storage adoption remains open.
+- [ ] Define the adapter for Linen's input-indexed result types. Current native
+  execution independently checks ordinary results and producer state/emissions,
+  preserving Lun's existing nondependent signature restriction.
+
 ## Security
 
 - [ ] **linen's `FileSystem` capability can be escaped with `..`.** Checked

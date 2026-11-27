@@ -41,7 +41,7 @@ def spec : BuildSpec :=
 def input : Input := { spec, projectDir := "/work/src", packageName := "proj", toolchain := "leanprover/lean4:v4.34.0\n" }
 
 #guard (files input).map (·.1) ==
-  [ "lakefile.toml", "lean-toolchain", "LunDriver/Runtime.lean", "LunDriver/temporary.py", "LunDriver/Functions.lean"
+  [ "lakefile.toml", "lean-toolchain", "LunDriver/Runtime.lean", "LunDriver/temporary.py", "Lun/Cell.lean", "LunDriver/Functions.lean"
   , "LunDriver/Main.lean", "LunDriver/Functions/F0.lean", "LunDriver/Functions/F1.lean", "LunDriver/Graphs/G0.lean" ]
 
 #guard functionSource [] spec.functions[0]! ==
@@ -64,7 +64,10 @@ def input : Input := { spec, projectDir := "/work/src", packageName := "proj", t
 #guard has (lakefileSource input) "path = \"/work/src\""
 #guard has (lakefileSource input) "name = \"proj\""
 #guard has (mainSource spec) "[(\"main\", LunDriver.Graphs.«main»)]"
-#guard has (functionsSource spec) "[LunDriver.Impl.«math».«double», LunDriver.Impl.«add»]"
+#guard has (functionsSource spec) "LunDriver.Impl.«math».«double».withSource"
+#guard has (functionsSource spec) "LunDriver.Impl.«add».withSource"
+#guard has (functionsSource spec) spec.source.commit
+#guard has (functionsSource spec) "P.double"
 #guard functionTargets spec == ["LunDriver.Functions.F0", "LunDriver.Functions.F1"]
 #guard moduleFile "LunDriver.Graphs.G3" == "LunDriver/Graphs/G3.lean"
 

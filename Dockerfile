@@ -11,13 +11,14 @@
 #
 # LINEN_REF is the linen version pre-built into the package cache. Projects
 # locked to that exact revision start from it; any other revision builds its
-# own Linen checkout from scratch.
+# linen from scratch (slow, but correct). Drivers require >= v4.1.0 for the
+# shared signed native cell format and owned worker clients.
 
 FROM docker.io/library/ubuntu:24.04 AS base
 ARG LINEN_REF=bcfec9a81d6e738ecb273f89e2102b4712d8e160
 ADD https://raw.githubusercontent.com/typednotes/linen/${LINEN_REF}/ci/native-deps/apt.txt /tmp/linen-apt.txt
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      tar gzip python3 $(sed 's/#.*//' /tmp/linen-apt.txt) \
+      tar gzip python3 gnupg $(sed 's/#.*//' /tmp/linen-apt.txt) \
     && rm -rf /var/lib/apt/lists/*
 ENV ELAN_HOME=/opt/elan \
     PATH=/opt/elan/bin:${PATH} \
@@ -39,6 +40,7 @@ RUN lake build lun
 
 # ── The package cache: linen, built for the driver runtime's imports ─────────
 FROM base AS cache
+ARG LINEN_REF=bcfec9a81d6e738ecb273f89e2102b4712d8e160
 WORKDIR /warm
 RUN cp /tmp/lean-toolchain lean-toolchain \
     && printf '%s\n' \
@@ -48,6 +50,7 @@ RUN cp /tmp/lean-toolchain lean-toolchain \
          '[[lean_lib]]' 'name = "Warm"' > lakefile.toml \
     && printf '%s\n' \
          'import Linen.Control.Reactive' \
+         'import Linen.System.Cell' \
           'import Linen.Control.Monad.Effect.Handler' \
           'import Linen.Control.Monad.Effect.Producer' \
          'import Linen.Control.Monad.Effect.Trace' \
@@ -60,7 +63,7 @@ RUN cp /tmp/lean-toolchain lean-toolchain \
     && mv .lake/packages/linen "/opt/lun/cache/linen/${rev}"
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
-FROM base AS runtime
+FROM base AS runtime-base
 RUN useradd --system --create-home --uid 10001 lun \
     && mkdir -p /var/lib/lun \
     && chown -R lun /var/lib/lun /opt/elan
@@ -72,3 +75,10 @@ USER lun
 VOLUME /var/lib/lun
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/lun"]
+
+# The offline tutorial needs the pure SDK source in addition to Linen's cache.
+# This is opt-in; the final/default production target remains `runtime`.
+FROM runtime-base AS cell-demo
+COPY --from=builder --chown=lun /src/.lake/packages/liaison /opt/lun/sdk/liaison
+
+FROM runtime-base AS runtime

@@ -41,6 +41,8 @@ def ds : List Diagnostic := parse log
 
 #guard (linenTooOldHint ds[3]!).isSome
 #guard (linenTooOldHint ds[0]!).isNone
+#guard ((linenTooOldHint { ds[3]! with message := "unknown module prefix 'Linen.System.Cell'" }).map
+  (fun message => decide ((message.splitOn "4.1.0").length > 1))) == some true
 
 -- (Parsing itself is linen's `System.LakeLog`, tested there.)
 

@@ -2,6 +2,7 @@ import LunTest.Lun.ValidateTest
 import LunTest.Lun.SpecTest
 import LunTest.Lun.ManifestTest
 import LunTest.Lun.DriverTest
+import LunTest.Lun.CellTest
 import LunTest.Lun.DiagnosticsTest
 import LunTest.Lun.FetchTest
 import LunTest.Lun.LocalTest

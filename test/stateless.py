@@ -77,7 +77,8 @@ assert outputs(late, "delayed") == [12] and late["changed"][0]["timestamp"] == 5
 restart = call("timed", timed["state"], {"x": 20}, now=2000)
 assert outputs(restart, "delayed") == [20, 21] and restart["nextCallAt"] == 122000
 assert call("timed", restart["state"], now=121000)["changed"] == []
-assert outputs(call("timed", restart["state"], now=122000), "delayed") == [22]
+resumed = call("timed", restart["state"], now=122000)
+assert outputs(resumed, "delayed") == [22], resumed
 
 silent = call("silent", inputs={"x": 7})
 assert "output" not in silent["nodes"][1] and "output" not in silent["nodes"][2]

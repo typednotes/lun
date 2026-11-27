@@ -3,10 +3,10 @@
 # (`Examples/pricing`), execute its `invoice` graph with caller-owned state and update
 # its inputs (`Examples/Client.lean`).
 #
-#   Examples/run.sh [LINEN_DIR] [-- CLIENT OPTIONS…]
+#   python3 test/cell_compiler.py -- Examples/run.sh [LINEN_DIR] [-- CLIENT OPTIONS…]
 #
-# The project pins the Linen 5.0.0 release commit from GitHub, so the first build clones and
-# compiles linen (minutes). With LINEN_DIR (a linen checkout, >= 1.3.0) the
+# The project pins the Linen 5.0.0 commit from GitHub, so the first build clones and
+# compiles linen (minutes). With LINEN_DIR (a linen checkout, >= 4.1.0) the
 # project takes linen from there instead and reuses its build. Either way lun
 # runs in local mode (LUN_ALLOW_LOCAL=1), which admits the file:// repository
 # the project is copied into (and a path dependency). Client options, e.g.
